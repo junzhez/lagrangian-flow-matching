@@ -729,3 +729,62 @@ class ExactOptimalTransportHarmonicConditionalFlowMatcher(HarmonicConditionalFlo
         else:
             t, xt, ut = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
             return t, xt, ut, y0, y1
+
+
+class SchrodingerBridgeHarmonicConditionalFlowMatcher(HarmonicConditionalFlowMatcher):
+    """Schrödinger bridge flow matching with harmonic interpolation paths.
+
+    Combines:
+    - Harmonic (trigonometric) interpolation paths from HarmonicConditionalFlowMatcher
+    - SB time-dependent noise schedule: sigma_t = sigma * sqrt(t*(1-t))
+    - Entropic OT coupling with regularization reg = 2 * sigma^2
+
+    The conditional flow is the harmonic velocity plus the SB score correction:
+        ut = harmonic_flow(x0, x1, t) + (1-2t) / (2t(1-t)) * (xt - mu_t)
+
+    Parameters
+    ----------
+    sigma : Union[float, int]
+        Noise standard deviation (must be > 0).
+    omega : Union[float, int]
+        Harmonic interpolation parameter in radians (default pi/2).
+    ot_method : str
+        OT coupling method passed to OTPlanSampler (default "exact").
+    """
+
+    def __init__(
+        self,
+        sigma: Union[float, int] = 1.0,
+        omega: Union[float, int] = math.pi / 2,
+        ot_method: str = "exact",
+    ):
+        if sigma <= 0:
+            raise ValueError(f"Sigma must be strictly positive, got {sigma}.")
+        super().__init__(sigma=sigma, omega=omega)
+        self.ot_method = ot_method
+        self.ot_sampler = OTPlanSampler(method=ot_method, reg=2 * self.sigma**2)
+
+    def compute_sigma_t(self, t):
+        return self.sigma * torch.sqrt(t * (1 - t))
+
+    def compute_conditional_flow(self, x0, x1, t, xt):
+        t = pad_t_like_x(t, x0)
+        mu_t = self.compute_mu_t(x0, x1, t)
+        harmonic_flow = super().compute_conditional_flow(x0, x1, t, xt)
+        sigma_t_prime_over_sigma_t = (1 - 2 * t) / (2 * t * (1 - t) + 1e-8)
+        return harmonic_flow + sigma_t_prime_over_sigma_t * (xt - mu_t)
+
+    def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+
+    def guided_sample_location_and_conditional_flow(
+        self, x0, x1, y0=None, y1=None, t=None, return_noise=False
+    ):
+        x0, x1, y0, y1 = self.ot_sampler.sample_plan_with_labels(x0, x1, y0, y1)
+        if return_noise:
+            t, xt, ut, eps = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1, eps
+        else:
+            t, xt, ut = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1
