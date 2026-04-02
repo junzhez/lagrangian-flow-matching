@@ -26,7 +26,7 @@ from torchcfm.models.unet.unet import UNetModelWrapper
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string("model", "otcfm", help="flow matching model type")
-flags.DEFINE_float("omega", math.pi / 2, help="omega parameter for harmonic flow matchers")
+flags.DEFINE_float("omega", 1, help="omega parameter for harmonic flow matchers")
 flags.DEFINE_string("output_dir", "./results/", help="output_directory")
 # UNet
 flags.DEFINE_integer("num_channel", 128, help="base channel of UNet")
