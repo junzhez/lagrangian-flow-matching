@@ -14,6 +14,12 @@ To reproduce the experiments and save the weights, install the requirements from
 python3 train_cifar10.py --model "otcfm" --lr 2e-4 --ema_decay 0.9999 --batch_size 128 --total_steps 400001 --save_step 20000
 ```
 
+- For the OT-Harmonic Conditional Flow Matching method:
+
+```bash
+python train_cifar10.py --model "otharmonic" --lr 2e-4 --ema_decay 0.9999 --batch_size 128 --total_steps 400001 --save_step 20000
+```
+
 - For the Independent Conditional Flow Matching (I-CFM) method:
 
 ```bash
@@ -32,13 +38,13 @@ Note that you can train all our methods in parallel using multiple GPUs and Dist
 torchrun --standalone --nnodes=1 --nproc_per_node=NUM_GPUS_YOU_HAVE train_cifar10_ddp.py --model "otcfm" --lr 2e-4 --ema_decay 0.9999 --batch_size 128 --total_steps 400001 --save_step 20000 --parallel True --master_addr "MASTER_ADDR" --master_port "MASTER_PORT"
 ```
 
-To compute the FID from the OT-CFM model at end of training, run:
+To compute the FID from the OT-Harmonic-CFM model at end of training, run:
 
 ```bash
-python3 compute_fid.py --model "otcfm" --step 400000 --integration_method dopri5
+python3 compute_fid.py --model "otharmonic" --step 400000 --integration_method dopri5
 ```
 
-For the other models, change the "otcfm" argument by "icfm" or "fm". For easy reproducibility of our results, you can download the model weights at 400000 iterations here:
+For the other models, change the "otharmonic" argument by "otcfm", "icfm" or "fm". For easy reproducibility of our results, you can download the model weights at 400000 iterations here:
 
 - [icfm weights](https://github.com/atong01/conditional-flow-matching/releases/download/1.0.4/cfm_cifar10_weights_step_400000.pt)
 
