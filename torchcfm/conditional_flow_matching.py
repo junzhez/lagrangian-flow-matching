@@ -151,16 +151,27 @@ class AnisoParamsND:
         """
         data = np.asarray(data, dtype=float)
         data_flat = data.reshape(len(data), -1)
-        d = data_flat.shape[1]
+        N, d = data_flat.shape
         center = data_flat.mean(0)
         centered = data_flat - center
-        # Full PCA via SVD — rows of Vt are eigenvectors in descending variance order.
-        _, _, Vt = np.linalg.svd(centered, full_matrices=True)  # always [d, d]
+        # Thin SVD: Vt has shape (min(N, d), d).  When N < d (e.g. CIFAR-10 with a
+        # small fit batch), this avoids computing the d×d right-singular-vector matrix
+        # and is substantially faster than full_matrices=True.
+        _, _, Vt = np.linalg.svd(centered, full_matrices=False)  # (min(N, d), d)
+        k = Vt.shape[0]
+        if k < d:
+            # Complete Vt to a full (d, d) orthonormal basis by appending null-space
+            # vectors.  Draw random rows, project out the data subspace, then QR.
+            rng = np.random.default_rng(0)
+            rand = rng.standard_normal((d - k, d)).astype(float)
+            rand -= (rand @ Vt.T) @ Vt   # remove data-subspace components
+            Q, _ = np.linalg.qr(rand.T)  # Q: (d, d-k) orthonormal columns
+            Vt = np.vstack([Vt, Q.T])    # (d, d)
         omegas = np.linspace(omega_base, omega_base * omega_ratio, d)
         return cls(omegas=omegas, eigvecs=Vt, center=center)
 
     def to_tensors(self, device="cpu"):
-        """Return ``(R, w, center)`` as float32 tensors.
+        """Return ``(R, w, center)`` as float tensors.
 
         Returns
         -------
@@ -168,9 +179,9 @@ class AnisoParamsND:
         w      : Tensor, shape (d,)  — per-dimension frequencies
         center : Tensor, shape (d,)
         """
-        R = torch.tensor(self.eigvecs, dtype=torch.float32, device=device)
-        w = torch.tensor(self.omegas,  dtype=torch.float32, device=device)
-        c = torch.tensor(self.center,  dtype=torch.float32, device=device)
+        R = torch.tensor(self.eigvecs, dtype=torch.float, device=device)
+        w = torch.tensor(self.omegas,  dtype=torch.float, device=device)
+        c = torch.tensor(self.center,  dtype=torch.float, device=device)
         return R, w, c
 
 

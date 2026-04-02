@@ -7,6 +7,7 @@ import copy
 import math
 import os
 
+import numpy as np
 import torch
 from absl import app, flags
 from torchvision import datasets, transforms
@@ -14,10 +15,14 @@ from tqdm import trange
 from utils_cifar import ema, generate_samples, infiniteloop
 
 from torchcfm.conditional_flow_matching import (
+    AnisoParamsND,
+    AnisotropicHarmonicNDConditionalFlowMatcher,
     ConditionalFlowMatcher,
+    ExactOptimalTransportAnisotropicHarmonicNDConditionalFlowMatcher,
     ExactOptimalTransportConditionalFlowMatcher,
     ExactOptimalTransportHarmonicConditionalFlowMatcher,
     HarmonicConditionalFlowMatcher,
+    SchrodingerBridgeHarmonicConditionalFlowMatcher,
     TargetConditionalFlowMatcher,
     VariancePreservingConditionalFlowMatcher,
 )
@@ -27,6 +32,11 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_string("model", "otcfm", help="flow matching model type")
 flags.DEFINE_float("omega", 1, help="omega parameter for harmonic flow matchers")
+flags.DEFINE_float("omega_base", 0.8, help="base frequency for ND anisotropic flow matchers")
+flags.DEFINE_float("omega_ratio", 2.0, help="frequency ratio for ND anisotropic flow matchers")
+flags.DEFINE_integer("aniso_fit_batches", 10, help="number of batches used to fit AnisoParamsND")
+flags.DEFINE_float("sigma", 0.0, help="noise std for flow matcher (sbharmonic requires sigma > 0, defaults to 1.0)")
+flags.DEFINE_string("ot_method", "exact", help="OT method for sbharmonic: 'exact' or 'sinkhorn'")
 flags.DEFINE_string("output_dir", "./results/", help="output_directory")
 # UNet
 flags.DEFINE_integer("num_channel", 128, help="base channel of UNet")
@@ -57,6 +67,16 @@ device = torch.device("cuda" if use_cuda else "cpu")
 
 def warmup_lr(step):
     return min(step, FLAGS.warmup) / FLAGS.warmup
+
+
+def fit_aniso_params(dataloader):
+    samples = []
+    for i, (x, _) in enumerate(dataloader):
+        if i >= FLAGS.aniso_fit_batches:
+            break
+        samples.append(x.numpy())
+    data = np.concatenate(samples, axis=0)
+    return AnisoParamsND.from_data(data, omega_base=FLAGS.omega_base, omega_ratio=FLAGS.omega_ratio)
 
 
 def train(argv):
@@ -123,7 +143,7 @@ def train(argv):
     #            OT-CFM
     #################################
 
-    sigma = 0.0
+    sigma = FLAGS.sigma
     if FLAGS.model == "otcfm":
         FM = ExactOptimalTransportConditionalFlowMatcher(sigma=sigma)
     elif FLAGS.model == "icfm":
@@ -136,10 +156,23 @@ def train(argv):
         FM = HarmonicConditionalFlowMatcher(sigma=sigma, omega=FLAGS.omega)
     elif FLAGS.model == "otharmonic":
         FM = ExactOptimalTransportHarmonicConditionalFlowMatcher(sigma=sigma, omega=FLAGS.omega)
+    elif FLAGS.model == "sbharmonic":
+        sb_sigma = sigma if sigma > 0 else 1.0
+        FM = SchrodingerBridgeHarmonicConditionalFlowMatcher(
+            sigma=sb_sigma, omega=FLAGS.omega, ot_method=FLAGS.ot_method
+        )
+    elif FLAGS.model == "aniso":
+        aniso_params = fit_aniso_params(dataloader)
+        FM = AnisotropicHarmonicNDConditionalFlowMatcher(sigma=sigma, aniso_params=aniso_params)
+    elif FLAGS.model == "otaniso":
+        aniso_params = fit_aniso_params(dataloader)
+        FM = ExactOptimalTransportAnisotropicHarmonicNDConditionalFlowMatcher(
+            sigma=sigma, aniso_params=aniso_params
+        )
     else:
         raise NotImplementedError(
             f"Unknown model {FLAGS.model}, must be one of "
-            "['otcfm', 'icfm', 'fm', 'si', 'harmonic', 'otharmonic']"
+            "['otcfm', 'icfm', 'fm', 'si', 'harmonic', 'otharmonic', 'sbharmonic', 'aniso', 'otaniso']"
         )
 
     savedir = FLAGS.output_dir + FLAGS.model + "/"
