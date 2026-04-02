@@ -20,6 +20,7 @@ class OTPlanSampler:
         normalize_cost: bool = False,
         num_threads: Union[int, str] = 1,
         warn: bool = True,
+        cost_fn: Optional[callable] = None,
     ) -> None:
         """Initialize the OTPlanSampler class.
 
@@ -42,6 +43,9 @@ class OTPlanSampler:
             the maximum number of threads.
         warn: bool, optional
             if True, raises a warning if the algorithm does not converge
+        cost_fn: callable, optional
+            custom cost function ``cost_fn(x0, x1) -> Tensor[N0, N1]``.
+            If None (default), uses squared Euclidean distance.
         """
         # ot_fn should take (a, b, M) as arguments where a, b are marginals and
         # M is a cost matrix
@@ -59,6 +63,7 @@ class OTPlanSampler:
         self.reg_m = reg_m
         self.normalize_cost = normalize_cost
         self.warn = warn
+        self.cost_fn = cost_fn
 
     def get_map(self, x0, x1):
         """Compute the OT plan (wrt squared Euclidean cost) between a source and a target
@@ -81,7 +86,10 @@ class OTPlanSampler:
             x0 = x0.reshape(x0.shape[0], -1)
         if x1.dim() > 2:
             x1 = x1.reshape(x1.shape[0], -1)
-        M = torch.cdist(x0, x1) ** 2
+        if self.cost_fn is not None:
+            M = self.cost_fn(x0, x1)
+        else:
+            M = torch.cdist(x0, x1) ** 2
         if self.normalize_cost:
             M = M / M.max()  # should not be normalized when using minibatches
         p = self.ot_fn(a, b, M.detach().cpu().numpy())

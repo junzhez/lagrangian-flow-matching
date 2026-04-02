@@ -7,11 +7,260 @@
 
 import math
 import warnings
+from dataclasses import dataclass, field
 from typing import Union
 
+import numpy as np
 import torch
 
 from .optimal_transport import OTPlanSampler
+
+
+@dataclass
+class AnisoParams:
+    """Parameters for a 2-D anisotropic harmonic oscillator.
+
+    Attributes
+    ----------
+    omega1 : float
+        Low-frequency axis (e.g. along data crescents).
+    omega2 : float
+        High-frequency axis (e.g. across the gap).
+    angle : float
+        Rotation angle of the eigenbasis in radians.
+    center : np.ndarray, shape (2,)
+        Data center point.
+    """
+
+    omega1: float = 1.0
+    omega2: float = 2.0
+    angle: float = 0.0
+    center: "np.ndarray" = field(default_factory=lambda: np.zeros(2))
+
+    def __post_init__(self):
+        for name, w in [("omega1", self.omega1), ("omega2", self.omega2)]:
+            if math.sin(w) <= 0:
+                raise ValueError(
+                    f"{name}={w:.4f} is invalid: sin({name}) = {math.sin(w):.4f} ≤ 0. "
+                    "Anisotropic harmonic paths require sin(ω) > 0 (ω ∈ (0, π))."
+                )
+
+    @property
+    def R(self):
+        """2x2 rotation matrix from angle."""
+        c, s = np.cos(self.angle), np.sin(self.angle)
+        return np.array([[c, -s], [s, c]])
+
+    @property
+    def Omega2(self):
+        """Hessian matrix R.T @ diag([ω₁², ω₂²]) @ R."""
+        R = self.R
+        return R.T @ np.diag([self.omega1**2, self.omega2**2]) @ R
+
+    @classmethod
+    def from_data(cls, data, omega_ratio=2.0, omega_base=1.0):
+        """Fit AnisoParams to data by estimating the covariance eigenbasis.
+
+        Parameters
+        ----------
+        data : array-like, shape (N, 2)
+        omega_ratio : float
+            Ratio ω₂/ω₁ (default 2.0).  Must satisfy
+            ``sin(omega_base * omega_ratio) > 0``.
+        omega_base : float
+            Base frequency ω₁ (default 1.0).
+        """
+        data = np.asarray(data, dtype=float)
+        center = data.mean(0)
+        cov = np.cov(data.T)
+        _, eigvecs = np.linalg.eigh(cov)
+        # Normalize eigenvector sign so the largest-magnitude component is
+        # positive — ensures a deterministic rotation angle across data samples.
+        ev = eigvecs[:, 0].copy()
+        if ev[np.argmax(np.abs(ev))] < 0:
+            ev = -ev
+        angle = np.arctan2(ev[1], ev[0])
+        return cls(
+            omega1=omega_base,
+            omega2=omega_base * omega_ratio,
+            angle=float(angle),
+            center=center,
+        )
+
+    def to_tensors(self, device="cpu"):
+        """Return ``(R, w, center)`` as float32 torch tensors.
+
+        Returns
+        -------
+        R : Tensor, shape (2, 2)
+        w : Tensor, shape (2,)  — [ω₁, ω₂]
+        center : Tensor, shape (2,)
+        """
+        R = torch.tensor(self.R, dtype=torch.float32, device=device)
+        w = torch.tensor([self.omega1, self.omega2], dtype=torch.float32, device=device)
+        center = torch.tensor(self.center, dtype=torch.float32, device=device)
+        return R, w, center
+
+
+@dataclass
+class AnisoParamsND:
+    """N-dimensional anisotropic harmonic oscillator parameters.
+
+    Generalisation of ``AnisoParams`` to arbitrary dimension d via PCA.
+    High-variance PCA directions receive low ω (gentle paths);
+    low-variance directions receive high ω (tighter, more direct paths).
+
+    Attributes
+    ----------
+    omegas  : np.ndarray, shape (d,) — per-eigendirection frequencies
+    eigvecs : np.ndarray, shape (d, d) — rows are PCA eigenvectors (descending variance)
+    center  : np.ndarray, shape (d,)  — data mean (flat)
+    """
+
+    omegas:  "np.ndarray"
+    eigvecs: "np.ndarray"
+    center:  "np.ndarray"
+
+    def __post_init__(self):
+        bad = [int(k) for k, w in enumerate(self.omegas) if math.sin(float(w)) <= 0]
+        if bad:
+            raise ValueError(
+                f"omegas at indices {bad} have sin(ω) ≤ 0. "
+                "All omegas must satisfy sin(ω) > 0 (ω ∈ (0, π))."
+            )
+
+    @classmethod
+    def from_data(cls, data, omega_base: float = 0.8, omega_ratio: float = 2.0):
+        """Fit from data using PCA.
+
+        Parameters
+        ----------
+        data : array-like, shape (N, *dims)
+            Training samples — will be flattened to (N, d).
+        omega_base : float
+            Lowest frequency, assigned to the 1st PC (highest variance).
+            Default 0.8; sin(0.8) ≈ 0.72.
+        omega_ratio : float
+            Ratio omega_max / omega_base.  omega_max = omega_base * omega_ratio
+            is assigned to the last PC (lowest variance).  Must satisfy
+            sin(omega_base * omega_ratio) > 0, i.e. omega_base * omega_ratio < π.
+            Default 2.0 → omega_max = 1.6; sin(1.6) ≈ 1.0.
+
+        Frequencies are linearly spaced from omega_base (index 0) to
+        omega_base * omega_ratio (index d − 1).
+        """
+        data = np.asarray(data, dtype=float)
+        data_flat = data.reshape(len(data), -1)
+        d = data_flat.shape[1]
+        center = data_flat.mean(0)
+        centered = data_flat - center
+        # Full PCA via SVD — rows of Vt are eigenvectors in descending variance order.
+        _, _, Vt = np.linalg.svd(centered, full_matrices=True)  # always [d, d]
+        omegas = np.linspace(omega_base, omega_base * omega_ratio, d)
+        return cls(omegas=omegas, eigvecs=Vt, center=center)
+
+    def to_tensors(self, device="cpu"):
+        """Return ``(R, w, center)`` as float32 tensors.
+
+        Returns
+        -------
+        R      : Tensor, shape (d, d) — eigenvector matrix (rows = eigenvectors)
+        w      : Tensor, shape (d,)  — per-dimension frequencies
+        center : Tensor, shape (d,)
+        """
+        R = torch.tensor(self.eigvecs, dtype=torch.float32, device=device)
+        w = torch.tensor(self.omegas,  dtype=torch.float32, device=device)
+        c = torch.tensor(self.center,  dtype=torch.float32, device=device)
+        return R, w, c
+
+
+def _harmonic_action_cost(
+    x0: torch.Tensor, x1: torch.Tensor, omega: float
+) -> torch.Tensor:
+    """Batched pairwise isotropic harmonic-oscillator action cost matrix.
+
+    Computes the Mehler-kernel exponent for a scalar frequency ω applied
+    uniformly across all dimensions (identity eigenbasis, zero center):
+
+        S[i,j] = (ω / 2 sinω) [(‖x₀ᵢ‖² + ‖x₁ⱼ‖²) cosω − 2 ⟨x₀ᵢ, x₁ⱼ⟩]
+
+    This is the classical action of a harmonic oscillator with frequency ω
+    connecting x₀ at t=0 to x₁ at t=1.
+
+    Parameters
+    ----------
+    x0 : Tensor, shape (N0, *dim)
+    x1 : Tensor, shape (N1, *dim)
+    omega : float
+        Harmonic frequency in radians. Must satisfy sin(omega) != 0.
+
+    Returns
+    -------
+    S : Tensor, shape (N0, N1)
+    """
+    x0f = x0.reshape(x0.shape[0], -1)  # [N0, d]
+    x1f = x1.reshape(x1.shape[0], -1)  # [N1, d]
+    coeff = omega / (2.0 * math.sin(omega))
+    cos_w = math.cos(omega)
+    norm0_sq = (x0f ** 2).sum(-1)       # [N0]
+    norm1_sq = (x1f ** 2).sum(-1)       # [N1]
+    dot = x0f @ x1f.T                   # [N0, N1]
+    return coeff * (cos_w * (norm0_sq[:, None] + norm1_sq[None, :]) - 2.0 * dot)
+
+
+def _aniso_action_cost_nd(
+    x0: torch.Tensor, x1: torch.Tensor, params: "AnisoParamsND"
+) -> torch.Tensor:
+    """Batched pairwise N-D anisotropic action cost matrix.
+
+    Same Mehler-kernel formula as ``_aniso_action_cost`` but for arbitrary d.
+    Input tensors must already be flat (bs, d).
+
+    Parameters
+    ----------
+    x0 : Tensor, shape (N0, d)
+    x1 : Tensor, shape (N1, d)
+
+    Returns
+    -------
+    S : Tensor, shape (N0, N1)
+    """
+    R, w, center = params.to_tensors(x0.device)
+    x0t = (x0 - center) @ R.T      # [N0, d]
+    x1t = (x1 - center) @ R.T      # [N1, d]
+    a = x0t[:, None, :]             # [N0, 1, d]
+    b = x1t[None, :, :]             # [1, N1, d]
+    coeff = w / (2 * torch.sin(w))  # [d]
+    return (coeff * ((a**2 + b**2) * torch.cos(w) - 2 * a * b)).sum(-1)
+
+
+def _aniso_action_cost(
+    x0: torch.Tensor, x1: torch.Tensor, params: "AnisoParams"
+) -> torch.Tensor:
+    """Batched pairwise anisotropic action cost matrix.
+
+    Computes the Mehler-kernel exponent S[i,j]:
+        S[i,j] = Σₖ (ωₖ / 2 sinωₖ) [(x̃₀ᵢᵏ² + x̃₁ⱼᵏ²) cosωₖ - 2 x̃₀ᵢᵏ x̃₁ⱼᵏ]
+
+    where x̃ = R @ (x − center) are eigenbasis coordinates.
+
+    Parameters
+    ----------
+    x0 : Tensor, shape (N0, 2)
+    x1 : Tensor, shape (N1, 2)
+    params : AnisoParams
+
+    Returns
+    -------
+    S : Tensor, shape (N0, N1)
+    """
+    R, w, center = params.to_tensors(x0.device)
+    x0t = (x0 - center) @ R.T      # [N0, 2]
+    x1t = (x1 - center) @ R.T      # [N1, 2]
+    a = x0t[:, None, :]             # [N0, 1, 2]
+    b = x1t[None, :, :]             # [1, N1, 2]
+    coeff = w / (2 * torch.sin(w))  # [2]
+    return (coeff * ((a**2 + b**2) * torch.cos(w) - 2 * a * b)).sum(-1)
 
 
 def pad_t_like_x(t, x):
@@ -713,7 +962,10 @@ class ExactOptimalTransportHarmonicConditionalFlowMatcher(HarmonicConditionalFlo
 
     def __init__(self, sigma: Union[float, int] = 0.0, omega: Union[float, int] = math.pi / 2):
         super().__init__(sigma=sigma, omega=omega)
-        self.ot_sampler = OTPlanSampler(method="exact")
+        self.ot_sampler = OTPlanSampler(
+            method="exact",
+            cost_fn=lambda x0, x1: _harmonic_action_cost(x0, x1, self.omega),
+        )
 
     def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
         x0, x1 = self.ot_sampler.sample_plan(x0, x1)
@@ -732,24 +984,17 @@ class ExactOptimalTransportHarmonicConditionalFlowMatcher(HarmonicConditionalFlo
 
 
 class SchrodingerBridgeHarmonicConditionalFlowMatcher(HarmonicConditionalFlowMatcher):
-    """Schrödinger bridge flow matching with harmonic interpolation paths.
+    """VP Schrödinger bridge with harmonic oscillator reference.
 
-    Combines:
-    - Harmonic (trigonometric) interpolation paths from HarmonicConditionalFlowMatcher
-    - SB time-dependent noise schedule: sigma_t = sigma * sqrt(t*(1-t))
-    - Entropic OT coupling with regularization reg = 2 * sigma^2
+    All components derive from the same VP-SDE whose noise schedule
+    matches frequency ω:
+        - Mean: harmonic (trigonometric)
+        - Noise: σ·√(σ_t^HO · α_t^HO)  (harmonic bridge noise)
+        - Cost: Mehler action
+        - Score correction: (ω/2)(cot(ωt) - cot(ω(1-t)))
 
-    The conditional flow is the harmonic velocity plus the SB score correction:
-        ut = harmonic_flow(x0, x1, t) + (1-2t) / (2t(1-t)) * (xt - mu_t)
-
-    Parameters
-    ----------
-    sigma : Union[float, int]
-        Noise standard deviation (must be > 0).
-    omega : Union[float, int]
-        Harmonic interpolation parameter in radians (default pi/2).
-    ot_method : str
-        OT coupling method passed to OTPlanSampler (default "exact").
+    At ω=π/2: cosine schedule VP Schrödinger bridge.
+    At ω→0: recovers standard SB-CFM (Brownian bridge).
     """
 
     def __init__(
@@ -762,17 +1007,251 @@ class SchrodingerBridgeHarmonicConditionalFlowMatcher(HarmonicConditionalFlowMat
             raise ValueError(f"Sigma must be strictly positive, got {sigma}.")
         super().__init__(sigma=sigma, omega=omega)
         self.ot_method = ot_method
-        self.ot_sampler = OTPlanSampler(method=ot_method, reg=2 * self.sigma**2)
+        self.ot_sampler = OTPlanSampler(
+            method=ot_method,
+            reg=2 * self.sigma**2,
+            # Mehler action: consistent with harmonic reference
+            cost_fn=lambda x0, x1: _harmonic_action_cost(x0, x1, self.omega),
+        )
 
     def compute_sigma_t(self, t):
-        return self.sigma * torch.sqrt(t * (1 - t))
+        """σ_t^SB = σ · √(σ_t^HO · α_t^HO)
+
+        Harmonic bridge noise: generalizes σ·√(t(1-t)) to harmonic schedule.
+        """
+        w = self.omega
+        sw = math.sin(w)
+        sigma_ho = torch.sin(w * (1 - t)) / sw
+        alpha_ho = torch.sin(w * t) / sw
+        return self.sigma * torch.sqrt(sigma_ho * alpha_ho + 1e-10)
 
     def compute_conditional_flow(self, x0, x1, t, xt):
+        """u_t = (σ_t'/σ_t)(x_t - μ_t) + μ_t'
+
+        Score correction uses the harmonic bridge derivative:
+            σ_t'/σ_t = (ω/2)(cot(ωt) - cot(ω(1-t)))
+        """
         t = pad_t_like_x(t, x0)
         mu_t = self.compute_mu_t(x0, x1, t)
-        harmonic_flow = super().compute_conditional_flow(x0, x1, t, xt)
-        sigma_t_prime_over_sigma_t = (1 - 2 * t) / (2 * t * (1 - t) + 1e-8)
-        return harmonic_flow + sigma_t_prime_over_sigma_t * (xt - mu_t)
+
+        # Harmonic velocity: μ_t'
+        w = self.omega
+        sw = math.sin(w)
+        mu_t_dot = (
+            -w * torch.cos(w * (1 - t)) / sw * x0
+            + w * torch.cos(w * t) / sw * x1
+        )
+
+        # Score correction: (ω/2)(cot(ωt) - cot(ω(1-t)))
+        eps = 1e-8
+        score_correction = (w / 2) * (
+            torch.cos(w * t) / (torch.sin(w * t) + eps)
+            - torch.cos(w * (1 - t)) / (torch.sin(w * (1 - t)) + eps)
+        )
+
+        return score_correction * (xt - mu_t) + mu_t_dot
+
+    def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+
+    def guided_sample_location_and_conditional_flow(
+        self, x0, x1, y0=None, y1=None, t=None, return_noise=False
+    ):
+        x0, x1, y0, y1 = self.ot_sampler.sample_plan_with_labels(x0, x1, y0, y1)
+        if return_noise:
+            t, xt, ut, eps = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1, eps
+        else:
+            t, xt, ut = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1
+
+
+class AnisotropicHarmonicConditionalFlowMatcher(ConditionalFlowMatcher):
+    """Anisotropic harmonic flow matcher for 2-D data.
+
+    Uses per-dimension sinusoidal interpolation in the eigenbasis of Ω²:
+
+        ψ_t = R.T @ (sin(ω(1-t))/sin(ω) · x̃₀ + sin(ωt)/sin(ω) · x̃₁) + center
+
+    where x̃ = R @ (x − center) are coordinates in the rotated eigenbasis,
+    and ω = [ω₁, ω₂] are per-axis frequencies.  This generalises
+    ``HarmonicConditionalFlowMatcher`` to geometry-aware anisotropic paths.
+
+    Parameters
+    ----------
+    sigma : float
+        Noise standard deviation (default 0.0 — deterministic path).
+    aniso_params : AnisoParams, optional
+        Geometric parameters.  Defaults to ``AnisoParams()`` (ω₁=1.5, ω₂=4.5,
+        no rotation, centered at origin).  Use ``AnisoParams.from_data`` to
+        fit parameters to your target distribution.
+    """
+
+    def __init__(self, sigma: float = 0.0, aniso_params: "AnisoParams" = None):
+        super().__init__(sigma)
+        self.aniso_params = aniso_params if aniso_params is not None else AnisoParams()
+
+    def compute_mu_t(self, x0, x1, t):
+        """Anisotropic sinusoidal mean path ψ_t."""
+        t = pad_t_like_x(t, x0)
+        R, w, center = self.aniso_params.to_tensors(x0.device)
+        x0t = (x0 - center) @ R.T
+        x1t = (x1 - center) @ R.T
+        st = torch.sin(w * (1 - t)) / torch.sin(w)
+        at = torch.sin(w * t) / torch.sin(w)
+        return (st * x0t + at * x1t) @ R + center
+
+    def compute_conditional_flow(self, x0, x1, t, xt):
+        """Analytic velocity ψ̇_t (does not depend on xt)."""
+        del xt
+        t = pad_t_like_x(t, x0)
+        R, w, center = self.aniso_params.to_tensors(x0.device)
+        x0t = (x0 - center) @ R.T
+        x1t = (x1 - center) @ R.T
+        dst = -w * torch.cos(w * (1 - t)) / torch.sin(w)
+        dat =  w * torch.cos(w * t) / torch.sin(w)
+        return (dst * x0t + dat * x1t) @ R
+
+
+class ExactOptimalTransportAnisotropicHarmonicConditionalFlowMatcher(
+    AnisotropicHarmonicConditionalFlowMatcher
+):
+    """Action-OT anisotropic harmonic flow matcher.
+
+    Combines anisotropic harmonic paths (``AnisotropicHarmonicConditionalFlowMatcher``)
+    with exact minibatch OT coupling where the transport cost is the anisotropic
+    action S(x₀, x₁) instead of the default ½|x₁ − x₀|².
+
+    The anisotropic action penalises cross-gap transport (high ω₂) more than
+    along-manifold transport (low ω₁), so the coupling naturally pairs source
+    points to geometrically nearby target points.
+
+    Parameters
+    ----------
+    sigma : float
+        Noise standard deviation (default 0.0).
+    aniso_params : AnisoParams, optional
+        Geometric parameters (see ``AnisotropicHarmonicConditionalFlowMatcher``).
+    """
+
+    def __init__(self, sigma: float = 0.0, aniso_params: "AnisoParams" = None):
+        super().__init__(sigma=sigma, aniso_params=aniso_params)
+        p = self.aniso_params
+        self.ot_sampler = OTPlanSampler(
+            method="exact",
+            cost_fn=lambda x0, x1: _aniso_action_cost(x0, x1, p),
+        )
+
+    def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+
+    def guided_sample_location_and_conditional_flow(
+        self, x0, x1, y0=None, y1=None, t=None, return_noise=False
+    ):
+        x0, x1, y0, y1 = self.ot_sampler.sample_plan_with_labels(x0, x1, y0, y1)
+        if return_noise:
+            t, xt, ut, eps = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1, eps
+        else:
+            t, xt, ut = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1
+
+
+class AnisotropicHarmonicNDConditionalFlowMatcher(ConditionalFlowMatcher):
+    """N-dimensional anisotropic harmonic flow matcher.
+
+    Generalises ``AnisotropicHarmonicConditionalFlowMatcher`` to arbitrary
+    dimension *d* by applying per-eigencomponent sinusoidal interpolation in
+    the PCA eigenbasis of the target distribution:
+
+        ψ_t = R.T @ (sin(ω(1-t))/sin(ω) · x̃₀ + sin(ωt)/sin(ω) · x̃₁) + center
+
+    where x̃ = R @ (x_flat − center) are PCA coordinates, ω is a vector of
+    per-eigendirection frequencies, and R rows are PCA eigenvectors.
+
+    High-variance PCA directions receive low ω (gentle, nearly-linear paths);
+    low-variance directions receive high ω (tighter, sinusoidal paths).
+
+    Parameters
+    ----------
+    sigma : float
+        Noise standard deviation (default 0.0).
+    aniso_params : AnisoParamsND
+        Geometric parameters fit via ``AnisoParamsND.from_data(target_data)``.
+        Required — there is no sensible default for N-D data.
+    """
+
+    def __init__(self, sigma: float = 0.0, aniso_params: "AnisoParamsND" = None):
+        super().__init__(sigma)
+        if aniso_params is None:
+            raise ValueError(
+                "aniso_params is required. "
+                "Use AnisoParamsND.from_data(target_data) to compute it."
+            )
+        self.aniso_params = aniso_params
+
+    def compute_mu_t(self, x0, x1, t):
+        shape = x0.shape
+        bs = shape[0]
+        x0f = x0.reshape(bs, -1)
+        x1f = x1.reshape(bs, -1)
+        R, w, center = self.aniso_params.to_tensors(x0.device)
+        t1d = t.reshape(bs, 1)
+        x0t = (x0f - center) @ R.T
+        x1t = (x1f - center) @ R.T
+        st = torch.sin(w * (1 - t1d)) / torch.sin(w)
+        at = torch.sin(w * t1d) / torch.sin(w)
+        return ((st * x0t + at * x1t) @ R + center).reshape(shape)
+
+    def compute_conditional_flow(self, x0, x1, t, xt):
+        del xt
+        shape = x0.shape
+        bs = shape[0]
+        x0f = x0.reshape(bs, -1)
+        x1f = x1.reshape(bs, -1)
+        R, w, center = self.aniso_params.to_tensors(x0.device)
+        t1d = t.reshape(bs, 1)
+        x0t = (x0f - center) @ R.T
+        x1t = (x1f - center) @ R.T
+        dst = -w * torch.cos(w * (1 - t1d)) / torch.sin(w)
+        dat = w * torch.cos(w * t1d) / torch.sin(w)
+        return ((dst * x0t + dat * x1t) @ R).reshape(shape)
+
+
+class ExactOptimalTransportAnisotropicHarmonicNDConditionalFlowMatcher(
+    AnisotropicHarmonicNDConditionalFlowMatcher
+):
+    """Action-OT N-dimensional anisotropic harmonic flow matcher.
+
+    Combines N-D anisotropic harmonic paths with exact minibatch OT coupling
+    where the transport cost is the N-D anisotropic action S(x₀, x₁) in the
+    PCA eigenbasis, instead of the default ½|x₁ − x₀|².
+
+    High-variance PCA directions (low ω) incur low transport cost; low-variance
+    directions (high ω) penalise cross-gap transport, so the coupling naturally
+    pairs source points to geometrically nearby target points in the eigenbasis.
+
+    Parameters
+    ----------
+    sigma : float
+        Noise standard deviation (default 0.0).
+    aniso_params : AnisoParamsND
+        Geometric parameters fit via ``AnisoParamsND.from_data(target_data)``.
+    """
+
+    def __init__(self, sigma: float = 0.0, aniso_params: "AnisoParamsND" = None):
+        super().__init__(sigma=sigma, aniso_params=aniso_params)
+        p = self.aniso_params
+        self.ot_sampler = OTPlanSampler(
+            method="exact",
+            cost_fn=lambda x0, x1: _aniso_action_cost_nd(
+                x0.reshape(x0.shape[0], -1),
+                x1.reshape(x1.shape[0], -1),
+                p,
+            ),
+        )
 
     def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
         x0, x1 = self.ot_sampler.sample_plan(x0, x1)
