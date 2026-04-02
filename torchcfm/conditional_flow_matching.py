@@ -237,12 +237,14 @@ def _aniso_action_cost_nd(
     S : Tensor, shape (N0, N1)
     """
     R, w, center = params.to_tensors(x0.device)
-    x0t = (x0 - center) @ R.T      # [N0, d]
-    x1t = (x1 - center) @ R.T      # [N1, d]
-    a = x0t[:, None, :]             # [N0, 1, d]
-    b = x1t[None, :, :]             # [1, N1, d]
-    coeff = w / (2 * torch.sin(w))  # [d]
-    return (coeff * ((a**2 + b**2) * torch.cos(w) - 2 * a * b)).sum(-1)
+    x0t = (x0 - center) @ R.T          # [N0, d]
+    x1t = (x1 - center) @ R.T          # [N1, d]
+    coeff = w / (2 * torch.sin(w))      # [d]
+    c_cos = coeff * torch.cos(w)        # [d]
+    term0 = (x0t ** 2) @ c_cos          # [N0]
+    term1 = (x1t ** 2) @ c_cos          # [N1]
+    cross = (x0t * coeff) @ x1t.T       # [N0, N1]
+    return term0[:, None] + term1[None, :] - 2 * cross
 
 
 def _aniso_action_cost(
@@ -1202,32 +1204,39 @@ class AnisotropicHarmonicNDConditionalFlowMatcher(ConditionalFlowMatcher):
                 "Use AnisoParamsND.from_data(target_data) to compute it."
             )
         self.aniso_params = aniso_params
+        self._tc: dict = {}  # device-keyed tensor cache
+
+    def _tensors(self, device):
+        """Return (R, w, center, inv_sw, coeff, c_cos) cached per device."""
+        key = str(device)
+        if key not in self._tc:
+            R, w, center = self.aniso_params.to_tensors(device)
+            inv_sw = 1.0 / torch.sin(w)
+            coeff = w * inv_sw * 0.5
+            self._tc[key] = (R, w, center, inv_sw, coeff, coeff * torch.cos(w))
+        return self._tc[key]
 
     def compute_mu_t(self, x0, x1, t):
         shape = x0.shape
         bs = shape[0]
-        x0f = x0.reshape(bs, -1)
-        x1f = x1.reshape(bs, -1)
-        R, w, center = self.aniso_params.to_tensors(x0.device)
+        R, w, center, inv_sw = self._tensors(x0.device)[:4]
         t1d = t.reshape(bs, 1)
-        x0t = (x0f - center) @ R.T
-        x1t = (x1f - center) @ R.T
-        st = torch.sin(w * (1 - t1d)) / torch.sin(w)
-        at = torch.sin(w * t1d) / torch.sin(w)
+        x0t = (x0.reshape(bs, -1) - center) @ R.T
+        x1t = (x1.reshape(bs, -1) - center) @ R.T
+        st = torch.sin(w * (1 - t1d)) * inv_sw
+        at = torch.sin(w * t1d) * inv_sw
         return ((st * x0t + at * x1t) @ R + center).reshape(shape)
 
     def compute_conditional_flow(self, x0, x1, t, xt):
         del xt
         shape = x0.shape
         bs = shape[0]
-        x0f = x0.reshape(bs, -1)
-        x1f = x1.reshape(bs, -1)
-        R, w, center = self.aniso_params.to_tensors(x0.device)
+        R, w, center, inv_sw = self._tensors(x0.device)[:4]
         t1d = t.reshape(bs, 1)
-        x0t = (x0f - center) @ R.T
-        x1t = (x1f - center) @ R.T
-        dst = -w * torch.cos(w * (1 - t1d)) / torch.sin(w)
-        dat = w * torch.cos(w * t1d) / torch.sin(w)
+        x0t = (x0.reshape(bs, -1) - center) @ R.T
+        x1t = (x1.reshape(bs, -1) - center) @ R.T
+        dst = -w * torch.cos(w * (1 - t1d)) * inv_sw
+        dat = w * torch.cos(w * t1d) * inv_sw
         return ((dst * x0t + dat * x1t) @ R).reshape(shape)
 
 
@@ -1254,15 +1263,18 @@ class ExactOptimalTransportAnisotropicHarmonicNDConditionalFlowMatcher(
 
     def __init__(self, sigma: float = 0.0, aniso_params: "AnisoParamsND" = None):
         super().__init__(sigma=sigma, aniso_params=aniso_params)
-        p = self.aniso_params
-        self.ot_sampler = OTPlanSampler(
-            method="exact",
-            cost_fn=lambda x0, x1: _aniso_action_cost_nd(
-                x0.reshape(x0.shape[0], -1),
-                x1.reshape(x1.shape[0], -1),
-                p,
-            ),
-        )
+
+        def _cost(x0, x1):
+            # x0, x1 are already flat (bs, d) — OTPlanSampler reshapes before calling cost_fn
+            R, w, center, _, coeff, c_cos = self._tensors(x0.device)
+            x0t = (x0 - center) @ R.T
+            x1t = (x1 - center) @ R.T
+            term0 = (x0t ** 2) @ c_cos
+            term1 = (x1t ** 2) @ c_cos
+            cross = (x0t * coeff) @ x1t.T
+            return term0[:, None] + term1[None, :] - 2 * cross
+
+        self.ot_sampler = OTPlanSampler(method="exact", cost_fn=_cost)
 
     def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
         x0, x1 = self.ot_sampler.sample_plan(x0, x1)
