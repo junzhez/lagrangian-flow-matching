@@ -208,3 +208,6 @@ __marimo__/
 /examples/data
 *.pt
 *.pt
+*.jpg
+*.tgz
+*.mat
