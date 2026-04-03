@@ -100,7 +100,8 @@ def _load_batch(path: Path):
         d = pickle.load(f, encoding="bytes")
     # Keys may be bytes (Python 2 pickles) or strings.
     def _get(key):
-        return d.get(key) or d.get(key.encode() if isinstance(key, str) else key.decode())
+        val = d.get(key)
+        return val if val is not None else d.get(key.encode() if isinstance(key, str) else key.decode())
 
     data = _get("data")
     labels = _get("labels")
