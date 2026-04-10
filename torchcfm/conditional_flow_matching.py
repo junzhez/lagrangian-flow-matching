@@ -23,9 +23,9 @@ class AnisoParams:
     Attributes
     ----------
     omega1 : float
-        Low-frequency axis (e.g. along data crescents).
+        High-frequency axis (applied to the small-variance / constrained direction).
     omega2 : float
-        High-frequency axis (e.g. across the gap).
+        Low-frequency axis (applied to the large-variance / free direction).
     angle : float
         Rotation angle of the eigenbasis in radians.
     center : np.ndarray, shape (2,)
@@ -53,7 +53,12 @@ class AnisoParams:
 
     @property
     def Omega2(self):
-        """Hessian matrix R.T @ diag([ω₁², ω₂²]) @ R."""
+        """Hessian matrix R.T @ diag([ω₁², ω₂²]) @ R.
+
+        After rotation by ``angle``, dim-0 of the eigenbasis is the
+        small-variance axis (receives ω₁, the high frequency) and dim-1
+        is the large-variance axis (receives ω₂, the low frequency).
+        """
         R = self.R
         return R.T @ np.diag([self.omega1**2, self.omega2**2]) @ R
 
@@ -65,10 +70,10 @@ class AnisoParams:
         ----------
         data : array-like, shape (N, 2)
         omega_ratio : float
-            Ratio ω₂/ω₁ (default 2.0).  Must satisfy
-            ``sin(omega_base * omega_ratio) > 0``.
+            Ratio ω₁/ω₂ (default 2.0).  omega1 = omega_base * omega_ratio.
+            Must satisfy ``sin(omega_base * omega_ratio) > 0``.
         omega_base : float
-            Base frequency ω₁ (default 1.0).
+            Base frequency ω₂ (the low-frequency / large-variance value, default 1.0).
         """
         data = np.asarray(data, dtype=float)
         center = data.mean(0)
