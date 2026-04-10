@@ -34,6 +34,7 @@ flags.DEFINE_string("model", "otcfm", help="flow matching model type")
 flags.DEFINE_float("omega", 0.1, help="omega parameter for harmonic flow matchers")
 flags.DEFINE_float("omega_base", 0.8, help="base frequency for ND anisotropic flow matchers")
 flags.DEFINE_float("omega_ratio", 2.0, help="frequency ratio for ND anisotropic flow matchers")
+flags.DEFINE_string("freq_mode", "linear", help="frequency assignment mode for AnisoParamsND: 'linear', 'log', or 'power'")
 flags.DEFINE_integer("aniso_fit_batches", 10, help="number of batches used to fit AnisoParamsND")
 flags.DEFINE_float("sigma", 0.0, help="noise std for flow matcher (sbharmonic requires sigma > 0, defaults to 1.0)")
 flags.DEFINE_string("ot_method", "exact", help="OT method for sbharmonic: 'exact' or 'sinkhorn'")
@@ -76,7 +77,7 @@ def fit_aniso_params(dataloader):
             break
         samples.append(x.numpy())
     data = np.concatenate(samples, axis=0)
-    return AnisoParamsND.from_data(data, omega_base=FLAGS.omega_base, omega_ratio=FLAGS.omega_ratio)
+    return AnisoParamsND.from_data(data, omega_base=FLAGS.omega_base, omega_ratio=FLAGS.omega_ratio, freq_mode=FLAGS.freq_mode)
 
 
 def train(argv):

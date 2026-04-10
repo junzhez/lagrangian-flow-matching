@@ -135,7 +135,13 @@ class AnisoParamsND:
             )
 
     @classmethod
-    def from_data(cls, data, omega_base: float = 0.8, omega_ratio: float = 2.0):
+    def from_data(
+        cls,
+        data,
+        omega_base: float = 0.8,
+        omega_ratio: float = 2.0,
+        freq_mode: str = "linear",
+    ):
         """Fit from data using PCA.
 
         Parameters
@@ -150,9 +156,28 @@ class AnisoParamsND:
             is assigned to the last PC (lowest variance).  Must satisfy
             sin(omega_base * omega_ratio) > 0, i.e. omega_base * omega_ratio < π.
             Default 2.0 → omega_max = 1.6; sin(1.6) ≈ 1.0.
+        freq_mode : str
+            How to map PCA singular values to frequencies.  Options:
 
-        Frequencies are linearly spaced from omega_base (index 0) to
-        omega_base * omega_ratio (index d − 1).
+            ``'linear'`` (default)
+                Uniformly spaced by index: ``np.linspace(omega_base, omega_max, k)``.
+                Backward-compatible with existing checkpoints.
+
+            ``'log'`` (recommended for images / embeddings)
+                Log-linear in singular-value ratios.  Frequency of PC i is:
+                ``omega_base + (omega_max - omega_base) * log(s_max/s_i) / log(s_max/s_min)``
+                This distributes frequencies proportionally to information content
+                on a log scale, which matches the power-law decay typical of image
+                PCA spectra.  Falls back to ``'linear'`` when all singular values
+                are equal or the smallest is ≤ 0.
+
+            ``'power'``
+                Exponential in ``s_i / s_max``:
+                ``omega_base * (omega_max / omega_base) ** (1 - s_i / s_max)``.
+                Falls back to ``'linear'`` when s_max ≤ 0.
+
+            Null-space directions (when N < d) always receive ``omega_max``
+            regardless of ``freq_mode``, since no variance evidence exists for them.
         """
         data = np.asarray(data, dtype=float)
         data_flat = data.reshape(len(data), -1)
@@ -162,7 +187,7 @@ class AnisoParamsND:
         # Thin SVD: Vt has shape (min(N, d), d).  When N < d (e.g. CIFAR-10 with a
         # small fit batch), this avoids computing the d×d right-singular-vector matrix
         # and is substantially faster than full_matrices=True.
-        _, _, Vt = np.linalg.svd(centered, full_matrices=False)  # (min(N, d), d)
+        _, s, Vt = np.linalg.svd(centered, full_matrices=False)  # s: (k,), Vt: (k, d)
         k = Vt.shape[0]
         if k < d:
             # Complete Vt to a full (d, d) orthonormal basis by appending null-space
@@ -172,7 +197,30 @@ class AnisoParamsND:
             rand -= (rand @ Vt.T) @ Vt   # remove data-subspace components
             Q, _ = np.linalg.qr(rand.T)  # Q: (d, d-k) orthonormal columns
             Vt = np.vstack([Vt, Q.T])    # (d, d)
-        omegas = np.linspace(omega_base, omega_base * omega_ratio, d)
+        omega_max = omega_base * omega_ratio
+        omegas = np.empty(d)
+        if freq_mode == "linear":
+            omegas[:k] = np.linspace(omega_base, omega_max, k)
+        elif freq_mode == "log":
+            s_max, s_min = s[0], s[k - 1]
+            if s_min <= 0 or s_max == s_min:
+                omegas[:k] = np.linspace(omega_base, omega_max, k)
+            else:
+                t = np.log(s_max / s) / np.log(s_max / s_min)  # in [0, 1]
+                omegas[:k] = omega_base + (omega_max - omega_base) * t
+        elif freq_mode == "power":
+            s_max = s[0]
+            if s_max <= 0:
+                omegas[:k] = np.linspace(omega_base, omega_max, k)
+            else:
+                ratio = (s / s_max).clip(1e-12, 1.0)
+                omegas[:k] = omega_base * (omega_max / omega_base) ** (1.0 - ratio)
+        else:
+            raise ValueError(
+                f"freq_mode={freq_mode!r} is not recognised. "
+                "Choose 'linear', 'log', or 'power'."
+            )
+        omegas[k:] = omega_max  # null-space directions have no variance ordering
         return cls(omegas=omegas, eigvecs=Vt, center=center)
 
     def to_tensors(self, device="cpu"):

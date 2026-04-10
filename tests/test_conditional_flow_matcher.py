@@ -9,6 +9,8 @@ import pytest
 import torch
 
 from torchcfm.conditional_flow_matching import (
+    AnisoParamsND,
+    AnisotropicHarmonicNDConditionalFlowMatcher,
     ConditionalFlowMatcher,
     ExactOptimalTransportConditionalFlowMatcher,
     SchrodingerBridgeConditionalFlowMatcher,
@@ -124,4 +126,79 @@ def test_fm(method, sigma, shape):
     assert torch.all(ut.eq(computed_ut))
     assert torch.all(xt.eq(computed_xt))
     assert torch.all(eps.eq(epsilon))
+
+
+# ---------------------------------------------------------------------------
+# AnisoParamsND.from_data — variance-adaptive frequency assignment tests
+# ---------------------------------------------------------------------------
+
+RNG = np.random.default_rng(42)
+_DATA_FULL = RNG.standard_normal((200, 16))   # N > d: full-rank data space
+_DATA_THIN = RNG.standard_normal((5, 20))     # N < d: null-space case
+
+
+@pytest.mark.parametrize("freq_mode", ["linear", "log", "power"])
+def test_aniso_nd_shape_and_constraint(freq_mode):
+    """Omegas have correct length and all satisfy sin(w) > 0."""
+    omega_base, omega_ratio = 0.8, 2.0
+    p = AnisoParamsND.from_data(_DATA_FULL, omega_base=omega_base, omega_ratio=omega_ratio, freq_mode=freq_mode)
+    d = _DATA_FULL.shape[1]
+    assert len(p.omegas) == d
+    assert np.all(np.sin(p.omegas) > 0)
+    np.testing.assert_allclose(p.omegas[0], omega_base, rtol=1e-6)
+    np.testing.assert_allclose(p.omegas[-1], omega_base * omega_ratio, rtol=1e-6)
+
+
+@pytest.mark.parametrize("freq_mode", ["log", "power"])
+def test_aniso_nd_monotone_ordering(freq_mode):
+    """Frequencies are non-decreasing for variance-adaptive modes."""
+    p = AnisoParamsND.from_data(_DATA_FULL, freq_mode=freq_mode)
+    assert np.all(np.diff(p.omegas) >= -1e-10), f"omegas not non-decreasing for freq_mode={freq_mode!r}"
+
+
+@pytest.mark.parametrize("freq_mode", ["linear", "log", "power"])
+def test_aniso_nd_null_space_gets_omega_max(freq_mode):
+    """Null-space directions (indices k:) always receive omega_max."""
+    omega_base, omega_ratio = 0.8, 2.0
+    omega_max = omega_base * omega_ratio
+    N, d = _DATA_THIN.shape
+    k = min(N, d)
+    p = AnisoParamsND.from_data(_DATA_THIN, omega_base=omega_base, omega_ratio=omega_ratio, freq_mode=freq_mode)
+    np.testing.assert_array_equal(p.omegas[k:], omega_max)
+
+
+def test_aniso_nd_log_uniform_variance_fallback():
+    """When all singular values are equal, log mode falls back to linspace (no NaN)."""
+    d = 8
+    # Orthonormal rows → all singular values equal to 1
+    data = np.eye(d)
+    p = AnisoParamsND.from_data(data, freq_mode="log")
+    assert not np.any(np.isnan(p.omegas))
+    assert np.all(np.sin(p.omegas) > 0)
+
+
+def test_aniso_nd_linear_regression():
+    """Default (linear) mode is bitwise-identical to the old np.linspace behaviour."""
+    omega_base, omega_ratio = 0.8, 2.0
+    p = AnisoParamsND.from_data(_DATA_FULL, omega_base=omega_base, omega_ratio=omega_ratio)
+    d = _DATA_FULL.shape[1]
+    expected = np.linspace(omega_base, omega_base * omega_ratio, d)
+    np.testing.assert_array_equal(p.omegas, expected)
+
+
+def test_aniso_nd_invalid_freq_mode():
+    """Unknown freq_mode raises ValueError."""
+    with pytest.raises(ValueError, match="freq_mode="):
+        AnisoParamsND.from_data(_DATA_FULL, freq_mode="invalid")
+
+
+def test_aniso_nd_log_downstream_no_nan():
+    """Fitting with freq_mode='log' and running the flow matcher produces no NaN."""
+    p = AnisoParamsND.from_data(_DATA_FULL, freq_mode="log")
+    fm = AnisotropicHarmonicNDConditionalFlowMatcher(aniso_params=p, sigma=0.0)
+    x0 = torch.tensor(RNG.standard_normal((32, 16)), dtype=torch.float)
+    x1 = torch.tensor(RNG.standard_normal((32, 16)), dtype=torch.float)
+    t, xt, ut = fm.sample_location_and_conditional_flow(x0, x1)
+    assert not torch.any(torch.isnan(xt)), "NaN in xt"
+    assert not torch.any(torch.isnan(ut)), "NaN in ut"
     assert any(t_given_init == t)
