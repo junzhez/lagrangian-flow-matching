@@ -31,7 +31,7 @@ from torchcfm.models.unet.unet import UNetModelWrapper
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string("model", "otcfm", help="flow matching model type")
-flags.DEFINE_float("omega", 1, help="omega parameter for harmonic flow matchers")
+flags.DEFINE_float("omega", 0.1, help="omega parameter for harmonic flow matchers")
 flags.DEFINE_float("omega_base", 0.8, help="base frequency for ND anisotropic flow matchers")
 flags.DEFINE_float("omega_ratio", 2.0, help="frequency ratio for ND anisotropic flow matchers")
 flags.DEFINE_integer("aniso_fit_batches", 10, help="number of batches used to fit AnisoParamsND")
