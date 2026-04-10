@@ -81,12 +81,12 @@ class AnisoParams:
             ev = -ev
         angle = np.arctan2(ev[1], ev[0])
         return cls(
-            omega1=omega_base,
-            omega2=omega_base * omega_ratio,
+            omega1=omega_base * omega_ratio,  # small variance → high ω
+            omega2=omega_base,                # large variance → low ω
             angle=float(angle),
             center=center,
         )
-
+        
     def to_tensors(self, device="cpu"):
         """Return ``(R, w, center)`` as float32 torch tensors.
 
@@ -270,10 +270,12 @@ def _aniso_action_cost(
     R, w, center = params.to_tensors(x0.device)
     x0t = (x0 - center) @ R.T      # [N0, 2]
     x1t = (x1 - center) @ R.T      # [N1, 2]
-    a = x0t[:, None, :]             # [N0, 1, 2]
-    b = x1t[None, :, :]             # [1, N1, 2]
     coeff = w / (2 * torch.sin(w))  # [2]
-    return (coeff * ((a**2 + b**2) * torch.cos(w) - 2 * a * b)).sum(-1)
+    c_cos = coeff * torch.cos(w)    # [2]
+    term0 = (x0t ** 2) @ c_cos      # [N0]
+    term1 = (x1t ** 2) @ c_cos      # [N1]
+    cross = (x0t * coeff) @ x1t.T   # [N0, N1]
+    return term0[:, None] + term1[None, :] - 2 * cross
 
 
 def pad_t_like_x(t, x):
@@ -1056,11 +1058,14 @@ class SchrodingerBridgeHarmonicConditionalFlowMatcher(HarmonicConditionalFlowMat
         )
 
         # Score correction: (ω/2)(cot(ωt) - cot(ω(1-t)))
-        eps = 1e-8
-        score_correction = (w / 2) * (
-            torch.cos(w * t) / (torch.sin(w * t) + eps)
-            - torch.cos(w * (1 - t)) / (torch.sin(w * (1 - t)) + eps)
-        )
+        # Near t=0/1: cot(θ) → 1/θ; switch at thresh=1e-3 rad where
+        # relative error of the approx is < θ²/3 ≈ 3e-7.
+        _thresh = 1e-3
+        wt = w * t
+        w1t = w * (1 - t)
+        cot_wt = torch.where(wt.abs() < _thresh, 1.0 / wt, torch.cos(wt) / torch.sin(wt))
+        cot_w1t = torch.where(w1t.abs() < _thresh, 1.0 / w1t, torch.cos(w1t) / torch.sin(w1t))
+        score_correction = (w / 2) * (cot_wt - cot_w1t)
 
         return score_correction * (xt - mu_t) + mu_t_dot
 
