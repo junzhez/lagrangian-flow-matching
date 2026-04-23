@@ -46,7 +46,7 @@ flags.DEFINE_float("sigma", 0.0, help="noise std for flow matcher (sbharmonic re
 flags.DEFINE_string("ot_method", "exact", help="OT method for sbharmonic: 'exact' or 'sinkhorn'")
 flags.DEFINE_string("output_dir", "./results/", help="output_directory")
 # UNet
-flags.DEFINE_integer("num_channel", 128, help="base channel of UNet")
+flags.DEFINE_integer("num_channel", 256, help="base channel of UNet")
 
 # Dataset
 flags.DEFINE_integer("img_size", 32, help="image resolution: 32, 64, 128, or 256")
@@ -60,9 +60,9 @@ flags.DEFINE_bool("download", False, help="download ImageNet 32x32 into data_dir
 # Training
 flags.DEFINE_float("lr", 2e-4, help="target learning rate")
 flags.DEFINE_float("grad_clip", 1.0, help="gradient norm clipping")
-flags.DEFINE_integer("total_steps", 400001, help="total training steps")
+flags.DEFINE_integer("total_steps", 500001, help="total training steps")
 flags.DEFINE_integer("warmup", 5000, help="learning rate warmup")
-flags.DEFINE_integer("batch_size", 128, help="batch size")
+flags.DEFINE_integer("batch_size", 256, help="batch size")
 flags.DEFINE_integer("num_workers", 4, help="workers of Dataloader")
 flags.DEFINE_float("ema_decay", 0.9999, help="ema decay rate")
 flags.DEFINE_bool("parallel", False, help="multi gpu training")
@@ -220,7 +220,7 @@ def train(argv):
     #   64  -> (1, 2, 3, 4)
     #   128 -> (1, 1, 2, 3, 4)
     #   256 -> (1, 1, 2, 2, 4, 4)
-    attn_res = "16" if img_size == 32 else "32,16,8"
+    attn_res = "16,8" if img_size == 32 else "32,16,8"
     net_model = UNetModelWrapper(
         dim=(3, img_size, img_size),
         num_res_blocks=2,
@@ -229,6 +229,8 @@ def train(argv):
         num_head_channels=64,
         attention_resolutions=attn_res,
         dropout=0.1,
+        use_scale_shift_norm=True,
+        resblock_updown=True,
     ).to(device)
 
     ema_model = copy.deepcopy(net_model)
