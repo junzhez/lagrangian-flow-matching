@@ -27,7 +27,7 @@ flags.DEFINE_integer("step", 400000, help="training step of the checkpoint to ev
 flags.DEFINE_integer("num_gen", 50000, help="number of samples to generate for FID")
 flags.DEFINE_float("tol", 1e-5, help="integrator tolerance (absolute and relative)")
 flags.DEFINE_integer("batch_size_fid", 1024, help="batch size for generation")
-flags.DEFINE_string("real_image_dir", "data/imagenet/train", help="path to real ImageNet images at target resolution (for custom stats)")
+flags.DEFINE_string("real_image_dir", None, help="path to real ImageNet images at target resolution (for custom stats)")
 flags.DEFINE_string("custom_stats_name", None, help="name for custom stats (default: imagenet{img_size})")
 
 FLAGS(sys.argv)
