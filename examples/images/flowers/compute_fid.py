@@ -18,14 +18,14 @@ FLAGS = flags.FLAGS
 IMG_SIZE = 128  # fixed resolution matching train_flower.py
 
 # UNet
-flags.DEFINE_integer("num_channel", 128, help="base channel of UNet")
+flags.DEFINE_integer("num_channel", 256, help="base channel of UNet")
 
 # Evaluation
 flags.DEFINE_string("input_dir", "./results", help="directory containing model checkpoints")
 flags.DEFINE_string("model", "otcfm", help="flow matching model type")
 flags.DEFINE_integer("integration_steps", 100, help="number of inference steps")
 flags.DEFINE_string("integration_method", "dopri5", help="integration method to use")
-flags.DEFINE_integer("step", 400000, help="training step of the checkpoint to evaluate")
+flags.DEFINE_integer("step", 200000, help="training step of the checkpoint to evaluate")
 flags.DEFINE_integer("num_gen", 50000, help="number of samples to generate for FID")
 flags.DEFINE_float("tol", 1e-5, help="integrator tolerance (absolute and relative)")
 flags.DEFINE_integer("batch_size_fid", 256, help="batch size for generation")
@@ -44,12 +44,14 @@ device = torch.device("cuda:0" if use_cuda else "cpu")
 # UNetModelWrapper auto-selects channel_mult=(1,1,2,3,4) for 128x128
 new_net = UNetModelWrapper(
     dim=(3, IMG_SIZE, IMG_SIZE),
-    num_res_blocks=2,
+    num_res_blocks=3,
     num_channels=FLAGS.num_channel,
     num_heads=4,
     num_head_channels=64,
     attention_resolutions="32,16,8",
-    dropout=0.1,
+    dropout=0.0,
+    use_scale_shift_norm=True,
+    resblock_updown=True,
 ).to(device)
 
 # Load the model
