@@ -15,8 +15,8 @@ from torchcfm.models.unet.unet import UNetModelWrapper
 
 FLAGS = flags.FLAGS
 # UNet
-flags.DEFINE_integer("num_channel", 128, help="base channel of UNet")
-flags.DEFINE_integer("img_size", 32, help="image resolution used during training: 32, 64, 128, or 256")
+flags.DEFINE_integer("num_channel", 256, help="base channel of UNet")
+flags.DEFINE_integer("img_size", 128, help="image resolution used during training: 32, 64, 128, or 256")
 
 # Evaluation
 flags.DEFINE_string("input_dir", "./results", help="directory containing model checkpoints")
@@ -36,15 +36,17 @@ img_size = FLAGS.img_size
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")
 
-attn_res = "16" if img_size == 32 else "32,16,8"
+attn_res = "16,8" if img_size == 32 else "32,16,8"
 new_net = UNetModelWrapper(
     dim=(3, img_size, img_size),
-    num_res_blocks=2,
+    num_res_blocks=3,
     num_channels=FLAGS.num_channel,
     num_heads=4,
     num_head_channels=64,
     attention_resolutions=attn_res,
-    dropout=0.1,
+    dropout=0.0,
+    use_scale_shift_norm=True,
+    resblock_updown=True,
 ).to(device)
 
 # Load the model

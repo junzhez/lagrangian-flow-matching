@@ -49,7 +49,7 @@ flags.DEFINE_string("output_dir", "./results/", help="output_directory")
 flags.DEFINE_integer("num_channel", 256, help="base channel of UNet")
 
 # Dataset
-flags.DEFINE_integer("img_size", 32, help="image resolution: 32, 64, 128, or 256")
+flags.DEFINE_integer("img_size", 128, help="image resolution: 32, 64, 128, or 256")
 flags.DEFINE_string(
     "data_dir",
     "./data/imagenet",
@@ -58,10 +58,10 @@ flags.DEFINE_string(
 flags.DEFINE_bool("download", False, help="download ImageNet 32x32 into data_dir if train/ does not exist")
 
 # Training
-flags.DEFINE_float("lr", 2e-4, help="target learning rate")
+flags.DEFINE_float("lr", 1e-4, help="target learning rate")
 flags.DEFINE_float("grad_clip", 1.0, help="gradient norm clipping")
 flags.DEFINE_integer("total_steps", 500001, help="total training steps")
-flags.DEFINE_integer("warmup", 5000, help="learning rate warmup")
+flags.DEFINE_integer("warmup", 20000, help="learning rate warmup")
 flags.DEFINE_integer("batch_size", 256, help="batch size")
 flags.DEFINE_integer("num_workers", 4, help="workers of Dataloader")
 flags.DEFINE_float("ema_decay", 0.9999, help="ema decay rate")
@@ -164,7 +164,9 @@ def _prepare_imagenet32(data_dir: str) -> None:
 
 
 def warmup_lr(step):
-    return min(step, FLAGS.warmup) / FLAGS.warmup
+    if step < FLAGS.warmup:
+        return step / FLAGS.warmup
+    return max(0.0, (FLAGS.total_steps - step) / (FLAGS.total_steps - FLAGS.warmup))
 
 
 def fit_aniso_params(dataloader):
@@ -223,12 +225,12 @@ def train(argv):
     attn_res = "16,8" if img_size == 32 else "32,16,8"
     net_model = UNetModelWrapper(
         dim=(3, img_size, img_size),
-        num_res_blocks=2,
+        num_res_blocks=3,
         num_channels=FLAGS.num_channel,
         num_heads=4,
         num_head_channels=64,
         attention_resolutions=attn_res,
-        dropout=0.1,
+        dropout=0.0,
         use_scale_shift_norm=True,
         resblock_updown=True,
     ).to(device)
