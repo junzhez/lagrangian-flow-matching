@@ -16,7 +16,7 @@ from torchcfm.models.unet.unet import UNetModelWrapper
 FLAGS = flags.FLAGS
 # UNet
 flags.DEFINE_integer("num_channel", 256, help="base channel of UNet")
-flags.DEFINE_integer("img_size", 128, help="image resolution used during training: 32, 64, 128, or 256")
+flags.DEFINE_integer("img_size", 32, help="image resolution used during training: 32, 64, 128, or 256")
 
 # Evaluation
 flags.DEFINE_string("input_dir", "./results", help="directory containing model checkpoints")
@@ -27,10 +27,13 @@ flags.DEFINE_integer("step", 400000, help="training step of the checkpoint to ev
 flags.DEFINE_integer("num_gen", 50000, help="number of samples to generate for FID")
 flags.DEFINE_float("tol", 1e-5, help="integrator tolerance (absolute and relative)")
 flags.DEFINE_integer("batch_size_fid", 1024, help="batch size for generation")
+flags.DEFINE_string("real_image_dir", "data/imagenet/train", help="path to real ImageNet images at target resolution (for custom stats)")
+flags.DEFINE_string("custom_stats_name", None, help="name for custom stats (default: imagenet{img_size})")
 
 FLAGS(sys.argv)
 
 img_size = FLAGS.img_size
+stats_name = FLAGS.custom_stats_name or f"imagenet{img_size}"
 
 # Define the model
 use_cuda = torch.cuda.is_available()
@@ -93,14 +96,23 @@ def gen_1_img(unused_latent):
     return img
 
 
+if FLAGS.real_image_dir:
+    print(f"Computing custom stats '{stats_name}' from {FLAGS.real_image_dir}")
+    fid.make_custom_stats(
+        name=stats_name,
+        fdir=FLAGS.real_image_dir,
+        mode="clean",
+        num=None,
+    )
+
 print("Start computing FID")
 score = fid.compute_fid(
     gen=gen_1_img,
-    dataset_name="imagenet",
+    dataset_name=stats_name,
     batch_size=FLAGS.batch_size_fid,
     dataset_res=img_size,
     num_gen=FLAGS.num_gen,
-    dataset_split="train",
+    dataset_split="custom",
     mode="clean",
 )
 print()
