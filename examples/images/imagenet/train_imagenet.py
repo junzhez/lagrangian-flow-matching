@@ -42,7 +42,7 @@ flags.DEFINE_string("output_dir", "./results/", help="output_directory")
 flags.DEFINE_integer("num_channel", 256, help="base channel of UNet")
 
 # Dataset
-flags.DEFINE_integer("img_size", 128, help="image resolution: 32, 64, 128, or 256")
+flags.DEFINE_integer("img_size", 32, help="image resolution: 32, 64, 128, or 256")
 flags.DEFINE_string(
     "data_dir",
     "./data/imagenet",
