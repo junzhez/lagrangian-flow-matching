@@ -41,6 +41,25 @@ def sample_8gaussians(n):
     return eight_normal_sample(n, 2, scale=5, var=0.1).float()
 
 
+def five_normal_sample(n, dim, scale=1, var=1):
+    m = torch.distributions.multivariate_normal.MultivariateNormal(
+        torch.zeros(dim), math.sqrt(var) * torch.eye(dim)
+    )
+    centers = torch.tensor([
+        (math.cos(2 * math.pi * k / 5), math.sin(2 * math.pi * k / 5))
+        for k in range(5)
+    ]) * scale
+    noise = m.sample((n,))
+    multi = torch.multinomial(torch.ones(5), n, replacement=True)
+    data = torch.stack([centers[multi[i]] + noise[i] for i in range(n)])
+    return data, multi
+
+
+def sample_5gaussians(n):
+    data, _ = five_normal_sample(n, 2, scale=5, var=0.1)
+    return data.float()
+
+
 class torch_wrapper(torch.nn.Module):
     """Wraps model to torchdyn compatible format."""
 
