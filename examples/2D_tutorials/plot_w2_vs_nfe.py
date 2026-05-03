@@ -1,0 +1,165 @@
+"""
+Plot W2 vs NFE per method, comparing 3 ODE solvers (euler, midpoint, rk4),
+aggregated over 4 (src → tgt) settings × 5 training seeds.
+
+Reads checkpoints written by compare_methods_normal_to_8gaussian.py and writes
+one PNG per method into --out-dir.
+
+Usage:
+    python examples/2D_tutorials/plot_w2_vs_nfe.py
+    python examples/2D_tutorials/plot_w2_vs_nfe.py --checkpoint-root checkpoints
+"""
+import argparse
+import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from torchdyn.core import NeuralODE
+
+from compare_methods_normal_to_8gaussian import (
+    DIM,
+    DISTRIBUTIONS,
+    N_EVAL,
+    _slug,
+    device,
+    set_seed,
+)
+from torchcfm.models.models import MLP
+from torchcfm.optimal_transport import wasserstein
+from torchcfm.utils import torch_wrapper
+
+
+METHOD_NAMES = [
+    "OT-CFM",
+    "OT-Harmonic w=0.001",
+    "OT-Harmonic w=1",
+    "OT-Harmonic w=pi/2",
+    "Stochastic Interpolant",
+]
+SETTINGS = [
+    ("normal",    "8gaussian"),
+    ("moons",     "8gaussian"),
+    ("normal",    "moons"),
+    ("normal",    "scurve"),
+]
+SOLVERS = ["euler", "midpoint", "rk4"]
+SOLVER_FACTOR = {"euler": 1, "midpoint": 2, "rk4": 4}
+NFE_LIST = [4, 8, 16, 32, 64, 128]
+REF_SOLVER, REF_NFE = "rk4", 128
+
+
+def load_model(ckpt_root: Path, src: str, tgt: str, method: str, seed: int) -> MLP:
+    path = ckpt_root / f"{src}_to_{tgt}" / f"{_slug(method)}_seed{seed}.pt"
+    model = MLP(dim=DIM, time_varying=True).to(device)
+    model.load_state_dict(torch.load(path, map_location=device))
+    model.eval()
+    return model
+
+
+def w2_with_solver(model, x0: torch.Tensor, target: torch.Tensor, solver: str, nfe: int) -> float:
+    steps = nfe // SOLVER_FACTOR[solver]
+    node = NeuralODE(torch_wrapper(model), solver=solver, sensitivity="adjoint")
+    t_span = torch.linspace(0, 1, steps + 1, device=device)
+    with torch.no_grad():
+        traj = node.trajectory(x0, t_span=t_span)
+    gen = traj[-1].cpu()
+    return float(wasserstein(gen, target, power=2))
+
+
+def preflight_checkpoints(ckpt_root: Path, n_seeds: int) -> None:
+    missing: list[Path] = []
+    for src, tgt in SETTINGS:
+        for method in METHOD_NAMES:
+            for seed in range(n_seeds):
+                path = ckpt_root / f"{src}_to_{tgt}" / f"{_slug(method)}_seed{seed}.pt"
+                if not path.exists():
+                    missing.append(path)
+    if missing:
+        print(f"ERROR: {len(missing)} checkpoint file(s) missing under {ckpt_root}/", file=sys.stderr)
+        for p in missing[:10]:
+            print(f"  - {p}", file=sys.stderr)
+        if len(missing) > 10:
+            print(f"  ... and {len(missing) - 10} more", file=sys.stderr)
+        print("\nRun training for any missing (src, tgt) settings, e.g.:", file=sys.stderr)
+        for src, tgt in SETTINGS:
+            print(f"  python examples/2D_tutorials/compare_methods_normal_to_8gaussian.py "
+                  f"--src {src} --tgt {tgt} --n-train-seeds {n_seeds}", file=sys.stderr)
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--checkpoint-root", default="checkpoints",
+                        help="Root directory containing {src}_to_{tgt}/*.pt checkpoints")
+    parser.add_argument("--out-dir", default="plots/w2_vs_nfe",
+                        help="Directory to write per-method PNG plots into")
+    parser.add_argument("--n-train-seeds", type=int, default=5,
+                        help="Must match the value used when checkpoints were saved")
+    args = parser.parse_args()
+
+    ckpt_root = Path(args.checkpoint_root)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    preflight_checkpoints(ckpt_root, args.n_train_seeds)
+
+    # results[(method, solver, nfe)] = list of normalized W2 values across (setting, seed)
+    results: dict[tuple, list[float]] = {
+        (m, s, n): [] for m in METHOD_NAMES for s in SOLVERS for n in NFE_LIST
+    }
+
+    n_cells = len(SETTINGS) * len(METHOD_NAMES) * args.n_train_seeds
+    cell_idx = 0
+    for src, tgt in SETTINGS:
+        sample_src = DISTRIBUTIONS[src]
+        sample_tgt = DISTRIBUTIONS[tgt]
+        for method in METHOD_NAMES:
+            for seed in range(args.n_train_seeds):
+                cell_idx += 1
+                set_seed(seed)
+                x0 = sample_src(N_EVAL).to(device)
+                target = sample_tgt(N_EVAL)
+                model = load_model(ckpt_root, src, tgt, method, seed)
+
+                ref_w2 = w2_with_solver(model, x0, target, REF_SOLVER, REF_NFE)
+                if ref_w2 <= 0:
+                    print(f"  [{src}->{tgt} | {method} | seed {seed}] reference W2 == 0, skipping cell")
+                    continue
+
+                for solver in SOLVERS:
+                    for nfe in NFE_LIST:
+                        w2 = w2_with_solver(model, x0, target, solver, nfe)
+                        results[(method, solver, nfe)].append(w2 / ref_w2)
+
+                print(f"  [{cell_idx:3d}/{n_cells}] {src}->{tgt} | {method} | seed {seed}  "
+                      f"ref W2(rk4,128)={ref_w2:.4f}")
+
+    # Aggregate and plot one figure per method
+    for method in METHOD_NAMES:
+        fig, ax = plt.subplots(figsize=(6, 4))
+        for solver in SOLVERS:
+            vals = np.array([results[(method, solver, nfe)] for nfe in NFE_LIST])  # (n_nfe, n_samples)
+            means = vals.mean(axis=1)
+            stds = vals.std(axis=1, ddof=1)
+            line, = ax.plot(NFE_LIST, means, marker="o", label=solver)
+            ax.fill_between(NFE_LIST, means - stds, means + stds,
+                            alpha=0.2, color=line.get_color())
+        ax.set_xscale("log", base=2)
+        ax.set_xticks(NFE_LIST)
+        ax.set_xticklabels(NFE_LIST)
+        ax.set_xlabel("NFE")
+        ax.set_ylabel(f"W2 / W2({REF_SOLVER}, NFE={REF_NFE})")
+        ax.set_title(f"{method}\n(mean ± std over {len(SETTINGS)} settings × {args.n_train_seeds} seeds)")
+        ax.axhline(1.0, ls="--", color="gray", lw=0.7)
+        ax.legend()
+        fig.tight_layout()
+        out_path = out_dir / f"w2_vs_nfe_{_slug(method)}.png"
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"wrote {out_path}")
+
+
+if __name__ == "__main__":
+    main()

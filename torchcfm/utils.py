@@ -37,6 +37,14 @@ def sample_moons(n):
     return x0 * 3 - 1
 
 
+def sample_checkerboard(n):
+    x1 = np.random.rand(n) * 4 - 2
+    x2_ = np.random.rand(n) - np.random.randint(0, 2, n) * 2
+    x2 = x2_ + (np.floor(x1) % 2)
+    data = np.stack([x1, x2], axis=1).astype(np.float32)
+    return torch.from_numpy(data) * 3
+
+
 def sample_8gaussians(n):
     return eight_normal_sample(n, 2, scale=5, var=0.1).float()
 
