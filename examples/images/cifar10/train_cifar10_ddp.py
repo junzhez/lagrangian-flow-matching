@@ -16,6 +16,13 @@ from torchvision import datasets, transforms
 from tqdm import trange
 from utils_cifar import ema, generate_samples, infiniteloop, setup
 
+# cs.toronto.edu host has been unavailable; pull the byte-identical archive
+# from the Wayback Machine so download=True still works on fresh checkouts
+datasets.CIFAR10.url = (
+    "https://web.archive.org/web/20251219153818if_/"
+    "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+)
+
 from torchcfm.conditional_flow_matching import (
     ConditionalFlowMatcher,
     ExactOptimalTransportConditionalFlowMatcher,

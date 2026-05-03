@@ -211,3 +211,4 @@ __marimo__/
 *.jpg
 *.tgz
 *.mat
+/examples/images/cifar10/data
