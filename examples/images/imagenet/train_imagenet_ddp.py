@@ -213,7 +213,8 @@ def train(rank, total_num_gpus, argv):
             "['otcfm', 'icfm', 'fm', 'si', 'otsi', 'harmonic', 'otharmonic', 'sbharmonic', 'aniso', 'otaniso']"
         )
 
-    savedir = FLAGS.output_dir + FLAGS.model + "/"
+    suffix = f"_omega{FLAGS.omega}" if FLAGS.model in ("harmonic", "otharmonic", "sbharmonic") else ""
+    savedir = FLAGS.output_dir + FLAGS.model + suffix + "/"
     os.makedirs(savedir, exist_ok=True)
 
     global_step = 0

@@ -20,6 +20,7 @@ flags.DEFINE_integer("num_channel", 128, help="base channel of UNet")
 # Training
 flags.DEFINE_string("input_dir", "./results", help="output_directory")
 flags.DEFINE_string("model", "otcfm", help="flow matching model type")
+flags.DEFINE_float("omega", 0.1, help="omega parameter for harmonic flow matchers")
 flags.DEFINE_integer("integration_steps", 100, help="number of inference steps")
 flags.DEFINE_string("integration_method", "dopri5", help="integration method to use")
 flags.DEFINE_integer("step", 400000, help="training steps")
@@ -47,7 +48,8 @@ new_net = UNetModelWrapper(
 
 
 # Load the model
-PATH = f"{FLAGS.input_dir}/{FLAGS.model}/{FLAGS.model}_cifar10_weights_step_{FLAGS.step}.pt"
+suffix = f"_omega{FLAGS.omega}" if FLAGS.model in ("harmonic", "otharmonic", "sbharmonic") else ""
+PATH = f"{FLAGS.input_dir}/{FLAGS.model}{suffix}/{FLAGS.model}_cifar10_weights_step_{FLAGS.step}.pt"
 print("path: ", PATH)
 checkpoint = torch.load(PATH, map_location=device)
 state_dict = checkpoint["ema_model"]
