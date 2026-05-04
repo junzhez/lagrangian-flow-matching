@@ -303,6 +303,8 @@ def main():
     ckpt_root = Path(args.save_dir) / f"{args.src}_to_{args.tgt}"
 
     results = {}
+    total_train_time = 0.0
+    total_eval_time = 0.0
     for name, (fm, ot_sampler) in METHODS.items():
         print(f"\n=== {name} ===")
         seed_metrics = []
@@ -322,6 +324,8 @@ def main():
             seed_metrics.append(m)
             seed_train_times.append(train_time)
             seed_eval_times.append(eval_time)
+            total_train_time += train_time
+            total_eval_time += eval_time
             print(f"  [seed {seed}] W2={m[0]:.4f}  |NPE-1|={m[1]:.4f}  |NPE_ω=1-1|={m[2]:.4f}  "
                   f"(train {train_time:.1f}s, eval {eval_time:.1f}s)")
 
@@ -355,6 +359,8 @@ def main():
         print(f"{name:<28} {w2_str:>15} {npe_str:>15} {npw_str:>17} {tr_str:>15} {ev_str:>13}")
     print("=" * 110)
     print("Reported as mean ± std over training seeds (independent retrains). 0 = perfect; smaller is better.")
+    print(f"Total training time: {total_train_time:.1f}s    Total eval time: {total_eval_time:.1f}s")
+    return total_train_time, total_eval_time
 
 
 if __name__ == "__main__":
