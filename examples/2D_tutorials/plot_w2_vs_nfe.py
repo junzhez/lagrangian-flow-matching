@@ -1,10 +1,11 @@
 """
-Plot W2 vs NFE per solver, comparing 5 methods (OT-CFM, OT-Harmonic w=0.001 / 1
-/ pi/2, Stochastic Interpolant), aggregated over 4 (src → tgt) settings × 5
-training seeds. Covers 3 ODE solvers (euler, midpoint, rk4).
+Plot W2 vs NFE per (setting, solver), comparing 5 methods (OT-CFM, OT-Harmonic
+w=0.001 / 1 / pi/2, Stochastic Interpolant) with mean ± std over 5 training
+seeds. Covers 4 (src → tgt) settings × 3 ODE solvers (euler, midpoint, rk4) =
+12 PNGs.
 
 Reads checkpoints written by compare_methods_normal_to_8gaussian.py and writes
-one PNG per solver into --out-dir.
+one PNG per (setting, solver) into --out-dir.
 
 Usage:
     python examples/2D_tutorials/plot_w2_vs_nfe.py
@@ -69,6 +70,29 @@ def w2_with_solver(model, x0: torch.Tensor, target: torch.Tensor, solver: str, n
     return float(wasserstein(gen, target, power=2))
 
 
+def _load_results(payload: dict) -> dict[tuple, list[float]]:
+    """Return per-(src,tgt,method,solver,nfe) results, reshaping old 3-tuple keys.
+
+    Old caches stored results[(method, solver, nfe)] as a flat list of length
+    len(settings) * n_train_seeds, appended in the order (settings outer × seeds
+    inner). New caches store results[(src, tgt, method, solver, nfe)] of length
+    n_train_seeds directly.
+    """
+    raw = payload["results"]
+    sample_key = next(iter(raw))
+    if len(sample_key) == 5:
+        return raw
+    settings = payload["settings"]
+    n_seeds = payload["n_train_seeds"]
+    reshaped: dict[tuple, list[float]] = {}
+    for (method, solver, nfe), vals in raw.items():
+        for i, (src, tgt) in enumerate(settings):
+            reshaped[(src, tgt, method, solver, nfe)] = list(
+                vals[i * n_seeds : (i + 1) * n_seeds]
+            )
+    return reshaped
+
+
 def preflight_checkpoints(ckpt_root: Path, n_seeds: int) -> None:
     missing: list[Path] = []
     for src, tgt in SETTINGS:
@@ -114,14 +138,18 @@ def main():
     if results_file.exists() and not args.recompute:
         with open(results_file, "rb") as f:
             payload = pickle.load(f)
-        results = payload["results"]
+        results = _load_results(payload)
         print(f"loaded cached results from {results_file}")
     else:
         preflight_checkpoints(ckpt_root, args.n_train_seeds)
 
-        # results[(method, solver, nfe)] = list of raw W2 values across (setting, seed)
+        # results[(src, tgt, method, solver, nfe)] = list of W2 across n_train_seeds
         results: dict[tuple, list[float]] = {
-            (m, s, n): [] for m in METHOD_NAMES for s in SOLVERS for n in NFE_LIST
+            (src, tgt, m, s, n): []
+            for src, tgt in SETTINGS
+            for m in METHOD_NAMES
+            for s in SOLVERS
+            for n in NFE_LIST
         }
 
         n_cells = len(SETTINGS) * len(METHOD_NAMES) * args.n_train_seeds
@@ -140,7 +168,7 @@ def main():
                     for solver in SOLVERS:
                         for nfe in NFE_LIST:
                             w2 = w2_with_solver(model, x0, target, solver, nfe)
-                            results[(method, solver, nfe)].append(w2)
+                            results[(src, tgt, method, solver, nfe)].append(w2)
 
                     print(f"  [{cell_idx:3d}/{n_cells}] {src}->{tgt} | {method} | seed {seed}")
 
@@ -156,27 +184,32 @@ def main():
             }, f)
         print(f"wrote {results_file}")
 
-    # Aggregate and plot one figure per solver
-    for solver in SOLVERS:
-        fig, ax = plt.subplots(figsize=(6, 4))
-        for method in METHOD_NAMES:
-            vals = np.array([results[(method, solver, nfe)] for nfe in NFE_LIST])  # (n_nfe, n_samples)
-            means = vals.mean(axis=1)
-            stds = vals.std(axis=1, ddof=1)
-            line, = ax.plot(NFE_LIST, means, marker="o", label=method)
-            ax.fill_between(NFE_LIST, means - stds, means + stds,
-                            alpha=0.2, color=line.get_color())
-        ax.set_xscale("log", base=2)
-        ax.set_xticks(NFE_LIST)
-        ax.set_xticklabels(NFE_LIST)
-        ax.set_xlabel("NFE")
-        ax.set_ylabel("W2")
-        ax.legend(fontsize=8)
-        fig.tight_layout()
-        out_path = out_dir / f"w2_vs_nfe_{solver}.png"
-        fig.savefig(out_path, dpi=150)
-        plt.close(fig)
-        print(f"wrote {out_path}")
+    # One figure per (setting, solver), mean ± std over training seeds
+    for src, tgt in SETTINGS:
+        for solver in SOLVERS:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            for method in METHOD_NAMES:
+                vals = np.array(
+                    [results[(src, tgt, method, solver, nfe)] for nfe in NFE_LIST]
+                )  # (n_nfe, n_seeds)
+                means = vals.mean(axis=1)
+                stds = vals.std(axis=1, ddof=1)
+                line, = ax.plot(NFE_LIST, means, marker="o", label=method)
+                ax.fill_between(NFE_LIST, means - stds, means + stds,
+                                alpha=0.2, color=line.get_color())
+            ax.set_xscale("log", base=2)
+            ax.set_xticks(NFE_LIST)
+            ax.set_xticklabels(NFE_LIST)
+            ax.set_xlabel("NFE")
+            ax.set_ylabel("W2")
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.legend(fontsize=8)
+            fig.tight_layout()
+            out_path = out_dir / f"w2_vs_nfe_{src}_to_{tgt}_{solver}.png"
+            fig.savefig(out_path, dpi=150)
+            plt.close(fig)
+            print(f"wrote {out_path}")
 
 
 if __name__ == "__main__":

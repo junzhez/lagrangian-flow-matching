@@ -935,6 +935,43 @@ class VariancePreservingConditionalFlowMatcher(ConditionalFlowMatcher):
         return math.pi / 2 * (torch.cos(math.pi / 2 * t) * x1 - torch.sin(math.pi / 2 * t) * x0)
 
 
+class ExactOptimalTransportVariancePreservingConditionalFlowMatcher(
+    VariancePreservingConditionalFlowMatcher
+):
+    """OT-SI: Exact OT minibatch coupling combined with Albergo et al.'s trigonometric
+    stochastic interpolant.
+
+    Couples ``(x0, x1)`` via an exact (squared-Euclidean) OT plan and then applies the
+    variance-preserving trigonometric path
+
+        mu_t = cos(pi*t/2) * x0 + sin(pi*t/2) * x1
+        u_t  = (pi/2) * (cos(pi*t/2) * x1 - sin(pi*t/2) * x0)
+
+    inherited from :class:`VariancePreservingConditionalFlowMatcher`. Mirrors
+    :class:`ExactOptimalTransportConditionalFlowMatcher` but with the SI path instead
+    of the linear interpolant.
+    """
+
+    def __init__(self, sigma: Union[float, int] = 0.0):
+        super().__init__(sigma=sigma)
+        self.ot_sampler = OTPlanSampler(method="exact")
+
+    def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+
+    def guided_sample_location_and_conditional_flow(
+        self, x0, x1, y0=None, y1=None, t=None, return_noise=False
+    ):
+        x0, x1, y0, y1 = self.ot_sampler.sample_plan_with_labels(x0, x1, y0, y1)
+        if return_noise:
+            t, xt, ut, eps = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1, eps
+        else:
+            t, xt, ut = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1
+
+
 class HarmonicConditionalFlowMatcher(ConditionalFlowMatcher):
     """Harmonic path conditional flow matcher.
 

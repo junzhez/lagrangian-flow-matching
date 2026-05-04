@@ -20,6 +20,7 @@ from torchcfm.conditional_flow_matching import (
     ExactOptimalTransportAnisotropicHarmonicNDConditionalFlowMatcher,
     ExactOptimalTransportConditionalFlowMatcher,
     ExactOptimalTransportHarmonicConditionalFlowMatcher,
+    ExactOptimalTransportVariancePreservingConditionalFlowMatcher,
     HarmonicConditionalFlowMatcher,
     SchrodingerBridgeHarmonicConditionalFlowMatcher,
     TargetConditionalFlowMatcher,
@@ -169,6 +170,8 @@ def train(argv):
         FM = TargetConditionalFlowMatcher(sigma=sigma)
     elif FLAGS.model == "si":
         FM = VariancePreservingConditionalFlowMatcher(sigma=sigma)
+    elif FLAGS.model == "otsi":
+        FM = ExactOptimalTransportVariancePreservingConditionalFlowMatcher(sigma=sigma)
     elif FLAGS.model == "harmonic":
         FM = HarmonicConditionalFlowMatcher(sigma=sigma, omega=FLAGS.omega)
     elif FLAGS.model == "otharmonic":
@@ -189,7 +192,7 @@ def train(argv):
     else:
         raise NotImplementedError(
             f"Unknown model {FLAGS.model}, must be one of "
-            "['otcfm', 'icfm', 'fm', 'si', 'harmonic', 'otharmonic', 'sbharmonic', 'aniso', 'otaniso']"
+            "['otcfm', 'icfm', 'fm', 'si', 'otsi', 'harmonic', 'otharmonic', 'sbharmonic', 'aniso', 'otaniso']"
         )
 
     savedir = FLAGS.output_dir + FLAGS.model + "/"
