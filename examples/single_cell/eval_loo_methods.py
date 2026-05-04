@@ -190,18 +190,28 @@ def main():
         all_results[ds_name] = (ds_results, held_out)
 
     for ds_name, (ds_results, held_out) in all_results.items():
-        print("\n" + "=" * 92)
+        ms_col = 15  # width of "0.xxxx ± 0.xxxx"
+        header = (
+            f"{'Method':<28}  "
+            + "  ".join(f"{'t='+str(t):>6}" for t in held_out)
+            + "    "
+            + f"{'mean ± std':>{ms_col}}"
+        )
+        width = len(header)
+        print("\n" + "=" * width)
         print(f"DATASET: {ds_name}")
-        header = f"{'Method':<28}  " + "  ".join(f"t={t:>2}" for t in held_out) + "    avg W1"
         print(header)
-        print("-" * 92)
+        print("-" * width)
         for name in METHODS:
             per_t = [ds_results[name][t] for t in held_out]
-            avg = float(np.mean(per_t))
-            per_t_str = "  ".join(f"{w:>5.4f}" for w in per_t)
-            print(f"{name:<28}  {per_t_str}    {avg:>6.4f}")
-        print("=" * 92)
-    print("\nLower W1 is better. Average is over held-out timepoints, per dataset.")
+            mean = float(np.mean(per_t))
+            std = float(np.std(per_t, ddof=1)) if len(per_t) > 1 else 0.0
+            per_t_str = "  ".join(f"{w:>6.4f}" for w in per_t)
+            ms_str = f"{mean:.4f} ± {std:.4f}"
+            print(f"{name:<28}  {per_t_str}    {ms_str:>{ms_col}}")
+        print("=" * width)
+    print("\nLower W1 is better. Mean ± std is computed across held-out timepoints, "
+          "per dataset (sample std, ddof=1).")
 
 
 if __name__ == "__main__":
