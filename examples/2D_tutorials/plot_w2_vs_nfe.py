@@ -1,15 +1,17 @@
 """
-Plot W2 vs NFE per method, comparing 3 ODE solvers (euler, midpoint, rk4),
-aggregated over 4 (src → tgt) settings × 5 training seeds.
+Plot W2 vs NFE per solver, comparing 5 methods (OT-CFM, OT-Harmonic w=0.001 / 1
+/ pi/2, Stochastic Interpolant), aggregated over 4 (src → tgt) settings × 5
+training seeds. Covers 3 ODE solvers (euler, midpoint, rk4).
 
 Reads checkpoints written by compare_methods_normal_to_8gaussian.py and writes
-one PNG per method into --out-dir.
+one PNG per solver into --out-dir.
 
 Usage:
     python examples/2D_tutorials/plot_w2_vs_nfe.py
     python examples/2D_tutorials/plot_w2_vs_nfe.py --checkpoint-root checkpoints
 """
 import argparse
+import pickle
 import sys
 from pathlib import Path
 
@@ -47,7 +49,6 @@ SETTINGS = [
 SOLVERS = ["euler", "midpoint", "rk4"]
 SOLVER_FACTOR = {"euler": 1, "midpoint": 2, "rk4": 4}
 NFE_LIST = [4, 8, 16, 32, 64, 128]
-REF_SOLVER, REF_NFE = "rk4", 128
 
 
 def load_model(ckpt_root: Path, src: str, tgt: str, method: str, seed: int) -> MLP:
@@ -97,65 +98,82 @@ def main():
                         help="Directory to write per-method PNG plots into")
     parser.add_argument("--n-train-seeds", type=int, default=5,
                         help="Must match the value used when checkpoints were saved")
+    parser.add_argument("--results-file", default=None,
+                        help="Path to pickle of cached results. Defaults to "
+                             "<out-dir>/w2_vs_nfe_results.pkl. Loaded if it exists "
+                             "(unless --recompute), otherwise written after computation.")
+    parser.add_argument("--recompute", action="store_true",
+                        help="Ignore any existing results file and recompute from checkpoints.")
     args = parser.parse_args()
 
     ckpt_root = Path(args.checkpoint_root)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    results_file = Path(args.results_file) if args.results_file else out_dir / "w2_vs_nfe_results.pkl"
 
-    preflight_checkpoints(ckpt_root, args.n_train_seeds)
+    if results_file.exists() and not args.recompute:
+        with open(results_file, "rb") as f:
+            payload = pickle.load(f)
+        results = payload["results"]
+        print(f"loaded cached results from {results_file}")
+    else:
+        preflight_checkpoints(ckpt_root, args.n_train_seeds)
 
-    # results[(method, solver, nfe)] = list of normalized W2 values across (setting, seed)
-    results: dict[tuple, list[float]] = {
-        (m, s, n): [] for m in METHOD_NAMES for s in SOLVERS for n in NFE_LIST
-    }
+        # results[(method, solver, nfe)] = list of raw W2 values across (setting, seed)
+        results: dict[tuple, list[float]] = {
+            (m, s, n): [] for m in METHOD_NAMES for s in SOLVERS for n in NFE_LIST
+        }
 
-    n_cells = len(SETTINGS) * len(METHOD_NAMES) * args.n_train_seeds
-    cell_idx = 0
-    for src, tgt in SETTINGS:
-        sample_src = DISTRIBUTIONS[src]
-        sample_tgt = DISTRIBUTIONS[tgt]
-        for method in METHOD_NAMES:
-            for seed in range(args.n_train_seeds):
-                cell_idx += 1
-                set_seed(seed)
-                x0 = sample_src(N_EVAL).to(device)
-                target = sample_tgt(N_EVAL)
-                model = load_model(ckpt_root, src, tgt, method, seed)
+        n_cells = len(SETTINGS) * len(METHOD_NAMES) * args.n_train_seeds
+        cell_idx = 0
+        for src, tgt in SETTINGS:
+            sample_src = DISTRIBUTIONS[src]
+            sample_tgt = DISTRIBUTIONS[tgt]
+            for method in METHOD_NAMES:
+                for seed in range(args.n_train_seeds):
+                    cell_idx += 1
+                    set_seed(seed)
+                    x0 = sample_src(N_EVAL).to(device)
+                    target = sample_tgt(N_EVAL)
+                    model = load_model(ckpt_root, src, tgt, method, seed)
 
-                ref_w2 = w2_with_solver(model, x0, target, REF_SOLVER, REF_NFE)
-                if ref_w2 <= 0:
-                    print(f"  [{src}->{tgt} | {method} | seed {seed}] reference W2 == 0, skipping cell")
-                    continue
+                    for solver in SOLVERS:
+                        for nfe in NFE_LIST:
+                            w2 = w2_with_solver(model, x0, target, solver, nfe)
+                            results[(method, solver, nfe)].append(w2)
 
-                for solver in SOLVERS:
-                    for nfe in NFE_LIST:
-                        w2 = w2_with_solver(model, x0, target, solver, nfe)
-                        results[(method, solver, nfe)].append(w2 / ref_w2)
+                    print(f"  [{cell_idx:3d}/{n_cells}] {src}->{tgt} | {method} | seed {seed}")
 
-                print(f"  [{cell_idx:3d}/{n_cells}] {src}->{tgt} | {method} | seed {seed}  "
-                      f"ref W2(rk4,128)={ref_w2:.4f}")
+        results_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(results_file, "wb") as f:
+            pickle.dump({
+                "results": results,
+                "method_names": METHOD_NAMES,
+                "settings": SETTINGS,
+                "solvers": SOLVERS,
+                "nfe_list": NFE_LIST,
+                "n_train_seeds": args.n_train_seeds,
+            }, f)
+        print(f"wrote {results_file}")
 
-    # Aggregate and plot one figure per method
-    for method in METHOD_NAMES:
+    # Aggregate and plot one figure per solver
+    for solver in SOLVERS:
         fig, ax = plt.subplots(figsize=(6, 4))
-        for solver in SOLVERS:
+        for method in METHOD_NAMES:
             vals = np.array([results[(method, solver, nfe)] for nfe in NFE_LIST])  # (n_nfe, n_samples)
             means = vals.mean(axis=1)
             stds = vals.std(axis=1, ddof=1)
-            line, = ax.plot(NFE_LIST, means, marker="o", label=solver)
+            line, = ax.plot(NFE_LIST, means, marker="o", label=method)
             ax.fill_between(NFE_LIST, means - stds, means + stds,
                             alpha=0.2, color=line.get_color())
         ax.set_xscale("log", base=2)
         ax.set_xticks(NFE_LIST)
         ax.set_xticklabels(NFE_LIST)
         ax.set_xlabel("NFE")
-        ax.set_ylabel(f"W2 / W2({REF_SOLVER}, NFE={REF_NFE})")
-        ax.set_title(f"{method}\n(mean ± std over {len(SETTINGS)} settings × {args.n_train_seeds} seeds)")
-        ax.axhline(1.0, ls="--", color="gray", lw=0.7)
-        ax.legend()
+        ax.set_ylabel("W2")
+        ax.legend(fontsize=8)
         fig.tight_layout()
-        out_path = out_dir / f"w2_vs_nfe_{_slug(method)}.png"
+        out_path = out_dir / f"w2_vs_nfe_{solver}.png"
         fig.savefig(out_path, dpi=150)
         plt.close(fig)
         print(f"wrote {out_path}")

@@ -35,11 +35,26 @@ from torchcfm.utils import torch_wrapper
 
 MLP_WIDTH = 64
 SIGMA = 0.1
-BATCH_SIZE = 256
-N_ITER_DEFAULT = 10_000
-LR = 1e-4
+BATCH_SIZE = 128
+MAX_EPOCHS_DEFAULT = 1000
+TRAIN_FRAC = 0.8
+LR = 1e-3
+WEIGHT_DECAY = 1e-5
+ODE_SOLVER = "euler"
 N_EVAL = 1000
 INTEGRATION_STEPS = 100
+
+
+def runner_match_n_iter(X, batch_size: int, max_epochs: int) -> int:
+    """Effective optimizer-step count of Tong's runner on the same trajectory data.
+
+    The runner's CombinedLoader(mode="min_size") (distribution_datamodule.py:80) yields
+    one batch per timepoint per step over the 80% train split, so steps/epoch is
+    min_t(int(TRAIN_FRAC * |X_t|) // batch_size). Per-step gradient work matches
+    get_batch_loo, so matching n_iter to runner_steps matches total training work.
+    """
+    steps_per_epoch = max(1, min(int(TRAIN_FRAC * Xt.shape[0]) // batch_size for Xt in X))
+    return max_epochs * steps_per_epoch
 
 METHODS = {
     "OT-CFM":              (ExactOptimalTransportConditionalFlowMatcher(sigma=SIGMA), None),
@@ -103,7 +118,7 @@ def get_batch_loo(fm, X, batch_size, available_t, ot_sampler, device):
 
 def train_one(fm, ot_sampler, X, available_t, dim: int, n_iter: int, device):
     model = MLP(dim=dim, time_varying=True, w=MLP_WIDTH).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=LR)
+    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     for _ in range(n_iter):
         opt.zero_grad()
         t, xt, ut = get_batch_loo(fm, X, BATCH_SIZE, available_t, ot_sampler, device)
@@ -122,8 +137,8 @@ def eval_w1(model, X, held_out: int, available_t, device) -> float:
     ).float().to(device)
 
     t_eval = renumbered_time(held_out, available_t)
-    node = NeuralODE(torch_wrapper(model), solver="dopri5", sensitivity="adjoint")
-    t_span = torch.linspace(0.0, t_eval, INTEGRATION_STEPS, device=device)
+    node = NeuralODE(torch_wrapper(model), solver=ODE_SOLVER)
+    t_span = torch.linspace(0.0, t_eval, INTEGRATION_STEPS + 1, device=device)
     with torch.no_grad():
         traj = node.trajectory(x0, t_span=t_span)
     pred = traj[-1].cpu()
@@ -145,8 +160,12 @@ def main():
                         help="Which datasets to evaluate on")
     parser.add_argument("--held-out", type=int, nargs="+", default=None,
                         help="Override interior timepoints to leave out (default: all interior per dataset)")
-    parser.add_argument("--n-iter", type=int, default=N_ITER_DEFAULT,
-                        help="Training iterations per (dataset, method, held_out) cell")
+    parser.add_argument("--max-epochs", type=int, default=MAX_EPOCHS_DEFAULT,
+                        help="Runner-equivalent epochs; n_iter is computed per dataset as "
+                             "max_epochs * min_t(int(0.8 * |X_t|) // batch_size).")
+    parser.add_argument("--n-iter", type=int, default=None,
+                        help="Optional explicit override of training iterations; "
+                             "if set, supersedes --max-epochs.")
     parser.add_argument("--seed", type=int, default=0,
                         help="Random seed for reproducibility")
     args = parser.parse_args()
@@ -157,7 +176,8 @@ def main():
         torch.cuda.manual_seed_all(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"device={device}  datasets={args.datasets}  n_iter={args.n_iter}")
+    print(f"device={device}  datasets={args.datasets}  max_epochs={args.max_epochs}"
+          + (f"  n_iter_override={args.n_iter}" if args.n_iter is not None else ""))
 
     all_results = {}  # all_results[ds_name] = (ds_results, held_out_list)
     for ds_name in args.datasets:
@@ -167,6 +187,10 @@ def main():
         X = load_data(path, cfg["embedding"], cfg["time_col"], cfg["dim"])
         n_times = len(X)
         print(f"Loaded {n_times} timepoints; sizes={[x.shape[0] for x in X]}  dim={cfg['dim']}")
+        n_iter = (args.n_iter if args.n_iter is not None
+                  else runner_match_n_iter(X, BATCH_SIZE, args.max_epochs))
+        print(f"  n_iter={n_iter}  (steps/epoch={n_iter // args.max_epochs}, "
+              f"max_epochs={args.max_epochs})")
 
         held_out = args.held_out if args.held_out is not None else list(range(1, n_times - 1))
         for t in held_out:
@@ -182,7 +206,7 @@ def main():
                   f"renum_eval_t={renumbered_time(h, available_t):.3f} ===")
             for name, (fm, ot_sampler) in METHODS.items():
                 t0 = time.time()
-                model = train_one(fm, ot_sampler, X, available_t, cfg["dim"], args.n_iter, device)
+                model = train_one(fm, ot_sampler, X, available_t, cfg["dim"], n_iter, device)
                 w1 = eval_w1(model, X, h, available_t, device)
                 elapsed = time.time() - t0
                 ds_results[name][h] = w1
