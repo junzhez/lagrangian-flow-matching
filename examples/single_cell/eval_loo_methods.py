@@ -1,7 +1,7 @@
 """
 Leave-one-timepoint-out 1-Wasserstein evaluation of 5 flow-matching methods
-on three single-cell datasets: embryoid body (EB, PHATE-2D), CITE-seq (PCA-50)
-and Multiome (PCA-50).
+on three single-cell datasets: embryoid body (EB, PCA-5), CITE-seq (PCA-5)
+and Multiome (PCA-5).
 
 For each dataset and each interior held-out timepoint, train each method on
 the remaining timepoints (treated as evenly spaced via renumbering), integrate
@@ -50,9 +50,9 @@ METHODS = {
 }
 
 DATASETS = {
-    "eb":       {"file": "ebdata_v3.h5ad",                "embedding": "X_phate", "time_col": "sample_labels", "dim": 2},
-    "cite":     {"file": "op_cite_inputs_0.h5ad",         "embedding": "X_pca",   "time_col": "day",           "dim": 50},
-    "multiome": {"file": "op_train_multi_targets_0.h5ad", "embedding": "X_pca",   "time_col": "day",           "dim": 50},
+    "eb":       {"file": "ebdata_v3.h5ad",                "embedding": "X_pca",   "time_col": "sample_labels", "dim": 5},
+    "cite":     {"file": "op_cite_inputs_0.h5ad",         "embedding": "X_pca",   "time_col": "day",           "dim": 5},
+    "multiome": {"file": "op_train_multi_targets_0.h5ad", "embedding": "X_pca",   "time_col": "day",           "dim": 5},
 }
 
 DOWNLOAD_HELP = (
