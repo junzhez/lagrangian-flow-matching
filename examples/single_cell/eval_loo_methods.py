@@ -8,13 +8,19 @@ the remaining timepoints (treated as evenly spaced via renumbering), integrate
 from the earliest surviving timepoint up to the renumbered position of the
 held-out one, and compute the 1-Wasserstein distance to the held-out cells.
 
+Per-seed scalar = mean W1 across timepoints (mirrors runner's
+distribution_distances.py:72). Final 'mean ± std' is across --seeds
+(default 42..46, matching runner/scripts/two-dim-cfm.sh).
+
 Usage:
     python examples/single_cell/eval_loo_methods.py
-    python examples/single_cell/eval_loo_methods.py --datasets cite --held-out 1 --n-iter 500
+    python examples/single_cell/eval_loo_methods.py --datasets cite --held-out 1 \
+        --n-iter 500 --seeds 42 43
 """
 import argparse
 import bisect
 import math
+import random
 import time
 from pathlib import Path
 
@@ -43,6 +49,20 @@ WEIGHT_DECAY = 1e-5
 ODE_SOLVER = "euler"
 N_EVAL = 1000
 INTEGRATION_STEPS = 100
+
+
+def _seed_all(seed: int) -> None:
+    """Seed python, numpy and torch (CPU + all CUDA devices) deterministically.
+
+    Mirrors pl.seed_everything(seed, workers=True) used by Tong's runner
+    (runner/src/train.py:64).
+    """
+    seed = seed % (2**32)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def runner_match_n_iter(X, batch_size: int, max_epochs: int) -> int:
@@ -166,21 +186,20 @@ def main():
     parser.add_argument("--n-iter", type=int, default=None,
                         help="Optional explicit override of training iterations; "
                              "if set, supersedes --max-epochs.")
-    parser.add_argument("--seed", type=int, default=0,
-                        help="Random seed for reproducibility")
+    parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44, 45, 46],
+                        help="Independent training seeds; mean ± std is reported across "
+                             "these seeds (mirrors runner/scripts/two-dim-cfm.sh).")
     args = parser.parse_args()
 
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"device={device}  datasets={args.datasets}  max_epochs={args.max_epochs}"
+    print(f"device={device}  datasets={args.datasets}  max_epochs={args.max_epochs}  "
+          f"seeds={args.seeds}"
           + (f"  n_iter_override={args.n_iter}" if args.n_iter is not None else ""))
 
-    all_results = {}  # all_results[ds_name] = (ds_results, held_out_list)
-    for ds_name in args.datasets:
+    # all_results[ds_name][name][h] = list of per-seed W1 values (length = len(args.seeds))
+    all_results = {}
+    held_out_by_ds = {}
+    for ds_idx, ds_name in enumerate(args.datasets):
         cfg = DATASETS[ds_name]
         path = Path(args.data_dir) / cfg["file"]
         print(f"\n############  DATASET: {ds_name}  ({path.name})  ############")
@@ -198,22 +217,31 @@ def main():
                 raise ValueError(
                     f"{ds_name}: held-out t={t} must be interior (1..{n_times - 2})"
                 )
+        held_out_by_ds[ds_name] = held_out
 
-        ds_results = {name: {} for name in METHODS}
-        for h in held_out:
-            available_t = [t for t in range(n_times) if t != h]
-            print(f"\n=== {ds_name}  held_out t={h}  available={available_t}  "
-                  f"renum_eval_t={renumbered_time(h, available_t):.3f} ===")
-            for name, (fm, ot_sampler) in METHODS.items():
-                t0 = time.time()
-                model = train_one(fm, ot_sampler, X, available_t, cfg["dim"], n_iter, device)
-                w1 = eval_w1(model, X, h, available_t, device)
-                elapsed = time.time() - t0
-                ds_results[name][h] = w1
-                print(f"  {name:<28}  W1={w1:.4f}  ({elapsed:.1f}s)")
-        all_results[ds_name] = (ds_results, held_out)
+        ds_results = {name: {h: [] for h in held_out} for name in METHODS}
+        for seed in args.seeds:
+            print(f"\n----  seed={seed}  ----")
+            for h in held_out:
+                available_t = [t for t in range(n_times) if t != h]
+                print(f"=== {ds_name}  seed={seed}  held_out t={h}  "
+                      f"available={available_t}  "
+                      f"renum_eval_t={renumbered_time(h, available_t):.3f} ===")
+                base_seed = seed * 1_000_000 + ds_idx * 10_000 + h * 100
+                for name, (fm, ot_sampler) in METHODS.items():
+                    _seed_all(base_seed)        # train: shared across methods at (seed, ds, h)
+                    t0 = time.time()
+                    model = train_one(fm, ot_sampler, X, available_t, cfg["dim"], n_iter, device)
+                    _seed_all(base_seed + 1)    # eval: shared across methods
+                    w1 = eval_w1(model, X, h, available_t, device)
+                    elapsed = time.time() - t0
+                    ds_results[name][h].append(w1)
+                    print(f"  {name:<28}  W1={w1:.4f}  ({elapsed:.1f}s)")
+        all_results[ds_name] = ds_results
 
-    for ds_name, (ds_results, held_out) in all_results.items():
+    n_seeds = len(args.seeds)
+    for ds_name, ds_results in all_results.items():
+        held_out = held_out_by_ds[ds_name]
         ms_col = 15  # width of "0.xxxx ± 0.xxxx"
         header = (
             f"{'Method':<28}  "
@@ -223,19 +251,27 @@ def main():
         )
         width = len(header)
         print("\n" + "=" * width)
-        print(f"DATASET: {ds_name}")
+        print(f"DATASET: {ds_name}   (n_seeds={n_seeds})")
         print(header)
         print("-" * width)
         for name in METHODS:
-            per_t = [ds_results[name][t] for t in held_out]
-            mean = float(np.mean(per_t))
-            std = float(np.std(per_t, ddof=1)) if len(per_t) > 1 else 0.0
-            per_t_str = "  ".join(f"{w:>6.4f}" for w in per_t)
+            # Per-seed scalar = mean across timepoints (mirrors
+            # runner/src/models/components/distribution_distances.py:72).
+            per_t_means = [float(np.mean(ds_results[name][h])) for h in held_out]
+            per_seed_scalars = np.array(
+                [np.mean([ds_results[name][h][s] for h in held_out])
+                 for s in range(n_seeds)]
+            )
+            mean = float(per_seed_scalars.mean())
+            std = float(per_seed_scalars.std(ddof=1)) if n_seeds > 1 else 0.0
+            per_t_str = "  ".join(f"{w:>6.4f}" for w in per_t_means)
             ms_str = f"{mean:.4f} ± {std:.4f}"
             print(f"{name:<28}  {per_t_str}    {ms_str:>{ms_col}}")
         print("=" * width)
-    print("\nLower W1 is better. Mean ± std is computed across held-out timepoints, "
-          "per dataset (sample std, ddof=1).")
+    print(f"\nLower W1 is better. Per-timepoint columns show mean across {n_seeds} seeds. "
+          f"'mean ± std' is across {n_seeds} independent training seeds, each summarizing W1 "
+          f"averaged over held-out timepoints (sample std, ddof=1). Mirrors Tong's protocol "
+          f"(runner/scripts/two-dim-cfm.sh, distribution_distances.py:72).")
 
 
 if __name__ == "__main__":

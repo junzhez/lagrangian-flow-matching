@@ -213,3 +213,4 @@ __marimo__/
 *.mat
 /examples/images/cifar10/data
 *.png
+*.pkl
