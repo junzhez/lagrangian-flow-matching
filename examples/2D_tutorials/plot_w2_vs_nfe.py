@@ -93,9 +93,9 @@ def _load_results(payload: dict) -> dict[tuple, list[float]]:
     return reshaped
 
 
-def preflight_checkpoints(ckpt_root: Path, n_seeds: int) -> None:
+def preflight_checkpoints(ckpt_root: Path, n_seeds: int, settings: list[tuple[str, str]]) -> None:
     missing: list[Path] = []
-    for src, tgt in SETTINGS:
+    for src, tgt in settings:
         for method in METHOD_NAMES:
             for seed in range(n_seeds):
                 path = ckpt_root / f"{src}_to_{tgt}" / f"{_slug(method)}_seed{seed}.pt"
@@ -108,7 +108,7 @@ def preflight_checkpoints(ckpt_root: Path, n_seeds: int) -> None:
         if len(missing) > 10:
             print(f"  ... and {len(missing) - 10} more", file=sys.stderr)
         print("\nRun training for any missing (src, tgt) settings, e.g.:", file=sys.stderr)
-        for src, tgt in SETTINGS:
+        for src, tgt in settings:
             print(f"  python examples/2D_tutorials/compare_methods_normal_to_8gaussian.py "
                   f"--src {src} --tgt {tgt} --n-train-seeds {n_seeds}", file=sys.stderr)
         sys.exit(1)
@@ -128,12 +128,25 @@ def main():
                              "(unless --recompute), otherwise written after computation.")
     parser.add_argument("--recompute", action="store_true",
                         help="Ignore any existing results file and recompute from checkpoints.")
+    parser.add_argument("--src", default=None, choices=list(DISTRIBUTIONS),
+                        help="Source distribution. If set with --tgt, plot only this pair.")
+    parser.add_argument("--tgt", default=None, choices=list(DISTRIBUTIONS),
+                        help="Target distribution. If set with --src, plot only this pair.")
     args = parser.parse_args()
+
+    if (args.src is None) != (args.tgt is None):
+        parser.error("--src and --tgt must be provided together")
+    active_settings = [(args.src, args.tgt)] if args.src else SETTINGS
 
     ckpt_root = Path(args.checkpoint_root)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    results_file = Path(args.results_file) if args.results_file else out_dir / "w2_vs_nfe_results.pkl"
+    if args.results_file:
+        results_file = Path(args.results_file)
+    elif args.src:
+        results_file = out_dir / f"w2_vs_nfe_results_{args.src}_to_{args.tgt}.pkl"
+    else:
+        results_file = out_dir / "w2_vs_nfe_results.pkl"
 
     if results_file.exists() and not args.recompute:
         with open(results_file, "rb") as f:
@@ -141,20 +154,20 @@ def main():
         results = _load_results(payload)
         print(f"loaded cached results from {results_file}")
     else:
-        preflight_checkpoints(ckpt_root, args.n_train_seeds)
+        preflight_checkpoints(ckpt_root, args.n_train_seeds, active_settings)
 
         # results[(src, tgt, method, solver, nfe)] = list of W2 across n_train_seeds
         results: dict[tuple, list[float]] = {
             (src, tgt, m, s, n): []
-            for src, tgt in SETTINGS
+            for src, tgt in active_settings
             for m in METHOD_NAMES
             for s in SOLVERS
             for n in NFE_LIST
         }
 
-        n_cells = len(SETTINGS) * len(METHOD_NAMES) * args.n_train_seeds
+        n_cells = len(active_settings) * len(METHOD_NAMES) * args.n_train_seeds
         cell_idx = 0
-        for src, tgt in SETTINGS:
+        for src, tgt in active_settings:
             sample_src = DISTRIBUTIONS[src]
             sample_tgt = DISTRIBUTIONS[tgt]
             for method in METHOD_NAMES:
@@ -177,7 +190,7 @@ def main():
             pickle.dump({
                 "results": results,
                 "method_names": METHOD_NAMES,
-                "settings": SETTINGS,
+                "settings": active_settings,
                 "solvers": SOLVERS,
                 "nfe_list": NFE_LIST,
                 "n_train_seeds": args.n_train_seeds,
@@ -185,7 +198,7 @@ def main():
         print(f"wrote {results_file}")
 
     # One figure per (setting, solver), mean ± std over training seeds
-    for src, tgt in SETTINGS:
+    for src, tgt in active_settings:
         for solver in SOLVERS:
             fig, ax = plt.subplots(figsize=(6, 4))
             for method in METHOD_NAMES:
@@ -206,6 +219,7 @@ def main():
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
             ax.legend(fontsize=12)
+            ax.set_title(f"{src} → {tgt} ({solver})", fontsize=16)
             fig.tight_layout()
             out_path = out_dir / f"w2_vs_nfe_{src}_to_{tgt}_{solver}.png"
             fig.savefig(out_path, dpi=150)
