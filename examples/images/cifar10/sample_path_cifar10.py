@@ -25,6 +25,14 @@ from torchdiffeq import odeint
 from torchcfm.models.unet.unet import UNetModelWrapper
 
 
+def set_determinism(seed: int) -> None:
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
 def build_unet(device: torch.device, num_channels: int = 128) -> UNetModelWrapper:
     return UNetModelWrapper(
         dim=(3, 32, 32),
@@ -131,6 +139,9 @@ def main() -> None:
                    help="UNet base channels; must match the checkpoint")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
+
+    set_determinism(args.seed)
+    print(f"determinism: cudnn.deterministic=True, seed={args.seed}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}")
