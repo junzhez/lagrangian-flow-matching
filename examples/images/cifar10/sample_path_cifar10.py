@@ -15,6 +15,7 @@ Usage
 """
 
 import argparse
+from collections import OrderedDict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -47,17 +48,19 @@ def build_unet(device: torch.device, num_channels: int = 128) -> UNetModelWrappe
 
 
 def load_checkpoint(model: torch.nn.Module, path: Path) -> None:
-    state = torch.load(path, map_location="cpu")
-    for key in ("ema_model", "net_model", "model", "state_dict"):
-        if isinstance(state, dict) and key in state:
-            state = state[key]
-            break
-    state = {k.replace("module.", ""): v for k, v in state.items()}
-    missing, unexpected = model.load_state_dict(state, strict=False)
-    if missing:
-        print(f"[load] missing keys (first 5): {missing[:5]}  total={len(missing)}")
-    if unexpected:
-        print(f"[load] unexpected keys (first 5): {unexpected[:5]}  total={len(unexpected)}")
+    checkpoint = torch.load(path, map_location="cpu")
+    if not isinstance(checkpoint, dict) or "ema_model" not in checkpoint:
+        found = list(checkpoint.keys()) if isinstance(checkpoint, dict) else type(checkpoint)
+        raise KeyError(f"checkpoint at {path} has no 'ema_model' key (found: {found})")
+    state = checkpoint["ema_model"]
+    try:
+        model.load_state_dict(state, strict=True)
+    except RuntimeError:
+        stripped = OrderedDict(
+            (k[7:] if k.startswith("module.") else k, v) for k, v in state.items()
+        )
+        model.load_state_dict(stripped, strict=True)
+    model.eval()
 
 
 @torch.no_grad()
@@ -130,11 +133,17 @@ def main() -> None:
     p.add_argument("--n-rows", type=int, default=3, help="number of samples")
     p.add_argument("--n-cols", type=int, default=9,
                    help="number of timestep snapshots in the figure")
-    p.add_argument("--steps", type=int, default=100,
+    p.add_argument("--steps", type=int, default=200,
                    help="number of internal ODE timesteps; n-cols are sampled "
-                        "from these uniformly so the last column is t=1")
+                        "from these uniformly so the last column is t=1. For "
+                        "fixed-step solvers (euler/rk4/midpoint) this also "
+                        "controls integration accuracy.")
     p.add_argument("--integrator", type=str, default="dopri5",
                    choices=["dopri5", "rk4", "midpoint", "euler"])
+    p.add_argument("--rtol", type=float, default=1e-5,
+                   help="ODE solver relative tolerance (dopri5 only)")
+    p.add_argument("--atol", type=float, default=1e-5,
+                   help="ODE solver absolute tolerance (dopri5 only)")
     p.add_argument("--num-channel", type=int, default=128,
                    help="UNet base channels; must match the checkpoint")
     p.add_argument("--seed", type=int, default=0)
@@ -152,11 +161,13 @@ def main() -> None:
     t_grid = torch.linspace(0.0, 1.0, args.steps + 1)
     col_indices = np.linspace(0, args.steps, args.n_cols).round().astype(int).tolist()
 
-    print(f"sampling {args.n_rows} trajectories with {args.steps}-step "
-          f"{args.integrator}; showing columns at indices {col_indices}")
+    print(f"sampling {args.n_rows} trajectories | integrator={args.integrator} "
+          f"| steps={args.steps} | rtol={args.rtol} atol={args.atol}; "
+          f"showing columns at indices {col_indices}")
     traj = sample_trajectory(
         model, n_samples=args.n_rows, t_grid=t_grid,
-        integrator=args.integrator, device=device, seed=args.seed,
+        integrator=args.integrator, rtol=args.rtol, atol=args.atol,
+        device=device, seed=args.seed,
     )
     print(f"trajectory tensor: {tuple(traj.shape)}  "
           f"(timesteps, samples, C, H, W)")
