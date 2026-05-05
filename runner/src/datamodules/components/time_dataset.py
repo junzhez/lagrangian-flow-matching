@@ -14,9 +14,19 @@ def tnet_dataset(path, embed_name="pcs", label_name="sample_labels", max_dim=100
     return a[embed_name][:, :max_dim], a[label_name], np.unique(a[label_name])
 
 
-def load_dataset(path, max_dim=100):
+def load_dataset(path, max_dim=100, embed_name=None, label_name=None):
     if path.endswith("h5ad"):
-        return adata_dataset(path, max_dim=max_dim)
+        return adata_dataset(
+            path,
+            embed_name=embed_name or "X_pca",
+            label_name=label_name or "day",
+            max_dim=max_dim,
+        )
     if path.endswith("npz"):
-        return tnet_dataset(path, max_dim=max_dim)
+        return tnet_dataset(
+            path,
+            embed_name=embed_name or "pcs",
+            label_name=label_name or "sample_labels",
+            max_dim=max_dim,
+        )
     raise NotImplementedError()

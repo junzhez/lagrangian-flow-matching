@@ -704,7 +704,6 @@ class VariancePreservingCFM(CFMLitModule):
     """
 
     def calc_mu_sigma(self, x0, x1, t):
-        assert not self.is_trajectory
         mu_t = torch.cos(math.pi / 2 * t) * x0 + torch.sin(math.pi / 2 * t) * x1
         sigma_t = self.hparams.sigma_min
         return mu_t, sigma_t
@@ -712,6 +711,40 @@ class VariancePreservingCFM(CFMLitModule):
     def calc_u(self, x0, x1, x, t, mu_t, sigma_t):
         del x, mu_t, sigma_t
         return math.pi / 2 * (torch.cos(math.pi / 2 * t) * x1 - torch.sin(math.pi / 2 * t) * x0)
+
+
+class OTHarmonicCFMLitModule(CFMLitModule):
+    """OT-CFM with a harmonic (trigonometric) interpolation path between (x0, x1).
+
+    Mirrors torchcfm.ExactOptimalTransportHarmonicConditionalFlowMatcher: pair (x0, x1) via
+    exact minibatch OT (handled by the parent's ot_sampler), then interpolate along
+    mu_t = cos(omega t) x0 + sin(omega t) (x1 - cos(omega) x0) / sin(omega).
+    """
+
+    def __init__(self, *args, omega: float = math.pi / 2, **kwargs):
+        super().__init__(*args, **kwargs)
+        if abs(math.sin(float(omega))) < 1e-8:
+            raise ValueError(
+                f"sin(omega) is near zero (omega={omega}); pick omega != k*pi to avoid NaN."
+            )
+        self.hparams.omega = float(omega)
+
+    def calc_mu_sigma(self, x0, x1, t):
+        omega = self.hparams.omega
+        sin_o = math.sin(omega)
+        cos_o = math.cos(omega)
+        coeff = (x1 - cos_o * x0) / sin_o
+        mu_t = torch.cos(omega * t) * x0 + torch.sin(omega * t) * coeff
+        sigma_t = self.hparams.sigma_min
+        return mu_t, sigma_t
+
+    def calc_u(self, x0, x1, x, t, mu_t, sigma_t):
+        del x, mu_t, sigma_t
+        omega = self.hparams.omega
+        sin_o = math.sin(omega)
+        cos_o = math.cos(omega)
+        coeff = (x1 - cos_o * x0) / sin_o
+        return -omega * x0 * torch.sin(omega * t) + omega * torch.cos(omega * t) * coeff
 
 
 class SBCFMLitModule(CFMLitModule):
@@ -723,7 +756,6 @@ class SBCFMLitModule(CFMLitModule):
     """
 
     def calc_mu_sigma(self, x0, x1, t):
-        assert not self.is_trajectory
         mu_t = t * x1 + (1 - t) * x0
         sigma_t = self.hparams.sigma_min * torch.sqrt(t - t**2)
         return mu_t, sigma_t

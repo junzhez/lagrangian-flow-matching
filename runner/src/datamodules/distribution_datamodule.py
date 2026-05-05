@@ -110,10 +110,14 @@ class CustomTrajectoryDataModule(LightningDataModule):
         num_workers: int = 0,
         pin_memory: bool = False,
         seed=None,
+        embed_name: Optional[str] = None,
+        label_name: Optional[str] = None,
     ):
         super().__init__()
         self.save_hyperparameters(logger=True)
-        self.data, self.labels, self.ulabels = load_dataset(system)
+        self.data, self.labels, self.ulabels = load_dataset(
+            system, embed_name=embed_name, label_name=label_name
+        )
         if hvg:
             import scanpy as sc
 
@@ -209,6 +213,8 @@ class CustomGeodesicTrajectoryDataModule(LightningDataModule):
         num_workers: int = 0,
         pin_memory: bool = False,
         seed=None,
+        embed_name: Optional[str] = None,
+        label_name: Optional[str] = None,
     ):
         super().__init__()
         self.save_hyperparameters(logger=True)
@@ -216,7 +222,9 @@ class CustomGeodesicTrajectoryDataModule(LightningDataModule):
         import scanpy as sc
 
         adata = sc.read_h5ad(system)
-        self.data, self.labels, self.ulabels = load_dataset(system)
+        self.data, self.labels, self.ulabels = load_dataset(
+            system, embed_name=embed_name, label_name=label_name
+        )
         if hvg:
             sc.pp.highly_variable_genes(adata, n_top_genes=max_dim)
             self.data = adata.X[:, adata.var["highly_variable"]].toarray()

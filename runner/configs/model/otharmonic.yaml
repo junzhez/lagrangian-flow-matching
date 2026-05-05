@@ -1,0 +1,42 @@
+_target_: src.models.cfm_module.OTHarmonicCFMLitModule
+_partial_: true
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.001
+  weight_decay: 1e-5
+
+net:
+  _target_: src.models.components.simple_mlp.VelocityNet
+  _partial_: true
+  hidden_dims: [64, 64, 64]
+  batch_norm: False
+  activation: "selu"
+
+augmentations:
+  _target_: src.models.components.augmentation.AugmentationModule
+  cnf_estimator: null
+  l1_reg: 0.
+  l2_reg: 0.
+  squared_l2_reg: 0.
+  jacobian_frobenius_reg: 0.
+  jacobian_diag_frobenius_reg: 0.
+  jacobian_off_diag_frobenius_reg: 0.
+
+partial_solver:
+  _target_: src.models.components.solver.FlowSolver
+  _partial_: true
+  ode_solver: "euler"
+  atol: 1e-5
+  rtol: 1e-5
+
+ot_sampler: "exact"
+
+sigma_min: 0.1
+
+# Harmonic interpolation parameter (radians). Default pi/2.
+omega: 1.5707963267948966
+
+# Set to non-negative integer for leave-one-timepoint-out training.
+leaveout_timepoint: -1
