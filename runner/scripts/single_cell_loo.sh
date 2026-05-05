@@ -2,7 +2,7 @@
 # Leave-one-timepoint-out training sweep on EB / CITE / Multiome.
 #
 # Mirrors the protocol in examples/single_cell/eval_loo_methods.py:
-#   - 5 methods: cfm (no OT), otcfm, otsi, otharmonic{w=0.001, w=1.0, w=pi/2}
+#   - 5 methods: otcfm, otsi, otharmonic{w=0.001, w=1.0, w=pi/2}
 #   - interior timepoints held out per dataset
 #   - 5 seeds (42..46)
 #
@@ -16,7 +16,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DATASETS=${DATASETS:-"eb cite multiome"}
-METHODS=${METHODS:-"cfm otcfm otsi otharmonic_w0.001 otharmonic_w1.0 otharmonic_wpi2"}
+METHODS=${METHODS:-"otcfm otsi otharmonic_w0.001 otharmonic_w1.0 otharmonic_wpi2"}
 SEEDS=${SEEDS:-"42,43,44,45,46"}
 
 # Interior timepoints to leave out (1..n-2) per dataset.
@@ -32,7 +32,6 @@ for ds in $DATASETS; do
   tps=${!tp_var}
   for method in $METHODS; do
     case "$method" in
-      cfm)              MODEL="cfm" ;          EXTRA="" ;;
       otcfm)            MODEL="otcfm" ;        EXTRA="" ;;
       otsi)             MODEL="otsi" ;         EXTRA="" ;;
       otharmonic_w0.001) MODEL="otharmonic" ;  EXTRA="model.omega=0.001" ;;
