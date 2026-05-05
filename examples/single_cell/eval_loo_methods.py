@@ -85,9 +85,9 @@ METHODS = {
 }
 
 DATASETS = {
-    "eb":       {"file": "ebdata_v3.h5ad",                "embedding": "X_pca",   "time_col": "sample_labels", "dim": 100},
-    "cite":     {"file": "op_cite_inputs_0.h5ad",         "embedding": "X_pca",   "time_col": "day",           "dim": 100},
-    "multiome": {"file": "op_train_multi_targets_0.h5ad", "embedding": "X_pca",   "time_col": "day",           "dim": 100},
+    "eb":       {"file": "ebdata_v3.h5ad",                "embedding": "X_pca",   "time_col": "sample_labels", "dim": 5},
+    "cite":     {"file": "op_cite_inputs_0.h5ad",         "embedding": "X_pca",   "time_col": "day",           "dim": 5},
+    "multiome": {"file": "op_train_multi_targets_0.h5ad", "embedding": "X_pca",   "time_col": "day",           "dim": 5},
 }
 
 DOWNLOAD_HELP = (
