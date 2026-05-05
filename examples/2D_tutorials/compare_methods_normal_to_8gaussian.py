@@ -294,6 +294,8 @@ def main():
                         help="Root directory for saved model checkpoints")
     parser.add_argument("--no-save", action="store_true",
                         help="Skip saving model checkpoints")
+    parser.add_argument("--eval-only", action="store_true",
+                        help="Skip training; load model weights from --save-dir instead.")
     args = parser.parse_args()
 
     sample_src = DISTRIBUTIONS[args.src]
@@ -312,39 +314,51 @@ def main():
         seed_eval_times = []
         for seed in range(args.n_train_seeds):
             set_seed(seed)
-            t0 = time.time()
-            model = train(fm, ot_sampler, sample_src, sample_tgt)
-            train_time = time.time() - t0
-            if not args.no_save:
-                ckpt_path = save_checkpoint(model, ckpt_root, name, seed)
-                print(f"  [seed {seed}] saved → {ckpt_path}")
+            if args.eval_only:
+                ckpt_path = ckpt_root / f"{_slug(name)}_seed{seed}.pt"
+                model = MLP(dim=DIM, time_varying=True).to(device)
+                model.load_state_dict(torch.load(ckpt_path, map_location=device))
+                print(f"  [seed {seed}] loaded ← {ckpt_path}")
+                train_time = None
+            else:
+                t0 = time.time()
+                model = train(fm, ot_sampler, sample_src, sample_tgt)
+                train_time = time.time() - t0
+                if not args.no_save:
+                    ckpt_path = save_checkpoint(model, ckpt_root, name, seed)
+                    print(f"  [seed {seed}] saved → {ckpt_path}")
+                total_train_time += train_time
             t1 = time.time()
             m = compute_metrics(model, sample_src, sample_tgt, eval_seed=seed)
             eval_time = time.time() - t1
             seed_metrics.append(m)
             seed_train_times.append(train_time)
             seed_eval_times.append(eval_time)
-            total_train_time += train_time
             total_eval_time += eval_time
+            train_str = "—" if train_time is None else f"{train_time:.1f}s"
             print(f"  [seed {seed}] W2={m[0]:.4f}  |NPE-1|={m[1]:.4f}  |NPE_ω=1-1|={m[2]:.4f}  "
-                  f"(train {train_time:.1f}s, eval {eval_time:.1f}s)")
+                  f"(train {train_str}, eval {eval_time:.1f}s)")
 
         runs = np.asarray(seed_metrics)
         n = args.n_train_seeds
         metric_mean = runs.mean(axis=0)
         metric_std = runs.std(axis=0, ddof=1) if n > 1 else np.zeros(3)
-        tr = np.asarray(seed_train_times)
         ev = np.asarray(seed_eval_times)
-        train_mean = float(tr.mean()); train_std = float(tr.std(ddof=1)) if n > 1 else 0.0
         eval_mean = float(ev.mean()); eval_std = float(ev.std(ddof=1)) if n > 1 else 0.0
+        if any(t is None for t in seed_train_times):
+            train_mean = train_std = None
+        else:
+            tr = np.asarray(seed_train_times)
+            train_mean = float(tr.mean()); train_std = float(tr.std(ddof=1)) if n > 1 else 0.0
 
         results[name] = (metric_mean, metric_std,
                          train_mean, train_std,
                          eval_mean, eval_std)
+        train_summary = "—" if train_mean is None else f"{train_mean:.1f}±{train_std:.1f}s"
         print(f"  → W2={metric_mean[0]:.4f}±{metric_std[0]:.4f}  "
               f"|NPE-1|={metric_mean[1]:.4f}±{metric_std[1]:.4f}  "
               f"|NPE_ω=1-1|={metric_mean[2]:.4f}±{metric_std[2]:.4f}  "
-              f"(train {train_mean:.1f}±{train_std:.1f}s, eval {eval_mean:.1f}±{eval_std:.1f}s)")
+              f"(train {train_summary}, eval {eval_mean:.1f}±{eval_std:.1f}s)")
 
     print("\n" + "=" * 110)
     print(f"Source: {args.src}  →  Target: {args.tgt}   (training seeds = {args.n_train_seeds})")
@@ -354,12 +368,15 @@ def main():
         w2_str  = f"{mm[0]:.3f}±{ms[0]:.3f}"
         npe_str = f"{mm[1]:.3f}±{ms[1]:.3f}"
         npw_str = f"{mm[2]:.3f}±{ms[2]:.3f}"
-        tr_str  = f"{tr_m:.1f}±{tr_s:.1f}"
+        tr_str  = "—" if tr_m is None else f"{tr_m:.1f}±{tr_s:.1f}"
         ev_str  = f"{ev_m:.1f}±{ev_s:.1f}"
         print(f"{name:<28} {w2_str:>15} {npe_str:>15} {npw_str:>17} {tr_str:>15} {ev_str:>13}")
     print("=" * 110)
     print("Reported as mean ± std over training seeds (independent retrains). 0 = perfect; smaller is better.")
-    print(f"Total training time: {total_train_time:.1f}s    Total eval time: {total_eval_time:.1f}s")
+    if args.eval_only:
+        print(f"Total training time: —    Total eval time: {total_eval_time:.1f}s   (loaded weights from {ckpt_root})")
+    else:
+        print(f"Total training time: {total_train_time:.1f}s    Total eval time: {total_eval_time:.1f}s")
     return total_train_time, total_eval_time
 
 
