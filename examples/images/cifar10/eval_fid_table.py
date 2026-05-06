@@ -19,8 +19,10 @@ Usage
 Missing checkpoints are skipped with a warning and rendered as em-dash. The
 results pickle is written after every cell so partial sweeps are resumable.
 
-Adaptive NFE convention: total dopri5 forward calls during FID generation
-divided by num_gen (i.e. average NFE per sample).
+Adaptive NFE convention: number of vector-field evaluations per ODE solve,
+i.e. total dopri5 forward calls divided by the number of batches. Each
+forward call evaluates the network on the whole batch at once, so this
+equals "NFE per sample" in the flow-matching literature.
 """
 
 import argparse
@@ -147,7 +149,7 @@ def compute_cell(
         counter = NFECounter(net).to(device)
         counter.reset()
         t_span = torch.linspace(0, 1, 2, device=device)
-        state = {"batch_idx": 0, "samples": 0}
+        state = {"batch_idx": 0}
 
         def gen_adaptive(_unused_latent):
             torch.manual_seed(seed + state["batch_idx"])
@@ -158,12 +160,11 @@ def compute_cell(
                     counter, x, t_span,
                     method="dopri5", rtol=rtol, atol=atol,
                 )
-            state["samples"] += x.shape[0]
             img = (traj[-1] * 127.5 + 128).clip(0, 255).to(torch.uint8)
             return img
 
         score = _fid_compute(gen_adaptive, num_gen, batch_size)
-        avg_nfe = counter.nfe / max(state["samples"], 1)
+        avg_nfe = counter.nfe / max(state["batch_idx"], 1)
         return score, avg_nfe
 
     raise ValueError(f"unknown nfe-mode: {mode!r}")
