@@ -214,3 +214,5 @@ __marimo__/
 /examples/images/cifar10/data
 *.png
 *.pkl
+*.zip
+*.h5ad
