@@ -240,12 +240,12 @@ def main():
         all_results[ds_name] = ds_results
 
     n_seeds = len(args.seeds)
+    ms_col = 15  # width of "0.xxxx ± 0.xxxx"
     for ds_name, ds_results in all_results.items():
         held_out = held_out_by_ds[ds_name]
-        ms_col = 15  # width of "0.xxxx ± 0.xxxx"
         header = (
             f"{'Method':<28}  "
-            + "  ".join(f"{'t='+str(t):>6}" for t in held_out)
+            + "  ".join(f"{'t='+str(t):>{ms_col}}" for t in held_out)
             + "    "
             + f"{'mean ± std':>{ms_col}}"
         )
@@ -255,23 +255,29 @@ def main():
         print(header)
         print("-" * width)
         for name in METHODS:
+            per_t_cells = []
+            for h in held_out:
+                vals = np.asarray(ds_results[name][h])
+                t_mean = float(vals.mean())
+                t_std = float(vals.std(ddof=1)) if n_seeds > 1 else 0.0
+                per_t_cells.append(f"{t_mean:.4f} ± {t_std:.4f}")
             # Per-seed scalar = mean across timepoints (mirrors
             # runner/src/models/components/distribution_distances.py:72).
-            per_t_means = [float(np.mean(ds_results[name][h])) for h in held_out]
             per_seed_scalars = np.array(
                 [np.mean([ds_results[name][h][s] for h in held_out])
                  for s in range(n_seeds)]
             )
             mean = float(per_seed_scalars.mean())
             std = float(per_seed_scalars.std(ddof=1)) if n_seeds > 1 else 0.0
-            per_t_str = "  ".join(f"{w:>6.4f}" for w in per_t_means)
+            per_t_str = "  ".join(f"{c:>{ms_col}}" for c in per_t_cells)
             ms_str = f"{mean:.4f} ± {std:.4f}"
             print(f"{name:<28}  {per_t_str}    {ms_str:>{ms_col}}")
         print("=" * width)
-    print(f"\nLower W1 is better. Per-timepoint columns show mean across {n_seeds} seeds. "
-          f"'mean ± std' is across {n_seeds} independent training seeds, each summarizing W1 "
-          f"averaged over held-out timepoints (sample std, ddof=1). Mirrors Tong's protocol "
-          f"(runner/scripts/two-dim-cfm.sh, distribution_distances.py:72).")
+    print(f"\nLower W1 is better. Per-timepoint columns show 'mean ± std' across {n_seeds} "
+          f"seeds at that t (sample std, ddof=1). Final 'mean ± std' is across {n_seeds} "
+          f"independent training seeds, each summarizing W1 averaged over held-out timepoints "
+          f"(sample std, ddof=1). Mirrors Tong's protocol (runner/scripts/two-dim-cfm.sh, "
+          f"distribution_distances.py:72).")
 
 
 if __name__ == "__main__":
