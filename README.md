@@ -191,7 +191,7 @@ For data-adaptive per-direction frequencies, swap in `torchlfm.AnisotropicHarmon
 
 ## Contributions
 
-- Lagrangian flow matching: [Shukai Du](https://shukaidu.github.io/)\*, [Junzhe Zhang](https://github.com/junzhez)\*, Yiming Li (\*equal contribution)
+- Lagrangian flow matching: [Junzhe Zhang](https://github.com/junzhez), [Shukai Du](https://shukaidu.github.io/), Yiming Li
 - Original TorchCFM library and CFM/OT-CFM/SF²M implementations: [Alexander Tong](http://alextong.net), [Kilian Fatras](http://kilianfatras.github.io)
 
 Suggestions and pull requests are welcome. Before opening an issue, please confirm:
