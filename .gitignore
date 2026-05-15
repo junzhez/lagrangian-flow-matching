@@ -216,3 +216,6 @@ __marimo__/
 *.pkl
 *.zip
 *.h5ad
+
+# macOS
+.DS_Store
