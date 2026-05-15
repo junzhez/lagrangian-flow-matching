@@ -7,14 +7,14 @@ To run our jupyter notebooks, installing our package:
 ```bash
 cd ../../
 
-# install torchcfm
+# install torchlfm
 pip install -e '.[forest-flow]'
 
 # install ipykernel
 conda install -c anaconda ipykernel
 
 # install conda env in jupyter notebook
-python -m ipykernel install --user --name=torchcfm
+python -m ipykernel install --user --name=torchlfm
 
-# launch our notebooks with the torchcfm kernel
+# launch our notebooks with the torchlfm kernel
 ```

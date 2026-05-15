@@ -29,14 +29,14 @@ import scanpy as sc
 import torch
 from torchdyn.core import NeuralODE
 
-from torchcfm.conditional_flow_matching import (
+from torchlfm.conditional_flow_matching import (
     ExactOptimalTransportConditionalFlowMatcher,
     ExactOptimalTransportHarmonicConditionalFlowMatcher,
     VariancePreservingConditionalFlowMatcher,
 )
-from torchcfm.models import MLP
-from torchcfm.optimal_transport import OTPlanSampler, wasserstein
-from torchcfm.utils import torch_wrapper
+from torchlfm.models import MLP
+from torchlfm.optimal_transport import OTPlanSampler, wasserstein
+from torchlfm.utils import torch_wrapper
 
 
 MLP_WIDTH = 64

@@ -1,5 +1,5 @@
-from torchcfm.models import MLP
-from torchcfm.models.unet import UNetModel
+from torchlfm.models import MLP
+from torchlfm.models.unet import UNetModel
 
 
 def test_initialize_models():

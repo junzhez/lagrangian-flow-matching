@@ -19,7 +19,7 @@ import torch
 from torchdiffeq import odeint
 from torchvision.utils import save_image
 
-from torchcfm.models.unet.unet import UNetModelWrapper
+from torchlfm.models.unet.unet import UNetModelWrapper
 
 
 def set_determinism(seed: int) -> None:
@@ -80,7 +80,7 @@ def sample_grid(
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", type=Path, required=True,
-                   help="path to a torchcfm CIFAR-10 .pt checkpoint")
+                   help="path to a torchlfm CIFAR-10 .pt checkpoint")
     p.add_argument("--output", type=Path, default=Path("grid.png"))
     p.add_argument("--rows", type=int, default=8, help="number of grid rows")
     p.add_argument("--cols", type=int, default=8, help="number of grid columns")

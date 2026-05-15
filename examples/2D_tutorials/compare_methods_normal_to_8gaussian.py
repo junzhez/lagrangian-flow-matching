@@ -25,14 +25,14 @@ from scipy.optimize import linear_sum_assignment
 from sklearn.datasets import make_s_curve
 from torchdyn.core import NeuralODE
 
-from torchcfm.conditional_flow_matching import (
+from torchlfm.conditional_flow_matching import (
     ExactOptimalTransportConditionalFlowMatcher,
     ExactOptimalTransportHarmonicConditionalFlowMatcher,
     VariancePreservingConditionalFlowMatcher,
 )
-from torchcfm.models.models import MLP
-from torchcfm.optimal_transport import OTPlanSampler, wasserstein
-from torchcfm.utils import sample_8gaussians, sample_moons, torch_wrapper
+from torchlfm.models.models import MLP
+from torchlfm.optimal_transport import OTPlanSampler, wasserstein
+from torchlfm.utils import sample_8gaussians, sample_moons, torch_wrapper
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

@@ -29,9 +29,9 @@ from compare_methods_normal_to_8gaussian import (
     device,
     set_seed,
 )
-from torchcfm.models.models import MLP
-from torchcfm.optimal_transport import wasserstein
-from torchcfm.utils import torch_wrapper
+from torchlfm.models.models import MLP
+from torchlfm.optimal_transport import wasserstein
+from torchlfm.utils import torch_wrapper
 
 
 METHOD_NAMES = [

@@ -5,7 +5,7 @@
 import pytest
 import torch
 
-from torchcfm.conditional_flow_matching import (
+from torchlfm.conditional_flow_matching import (
     ConditionalFlowMatcher,
     ExactOptimalTransportConditionalFlowMatcher,
     SchrodingerBridgeConditionalFlowMatcher,

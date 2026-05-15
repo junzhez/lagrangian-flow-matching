@@ -23,7 +23,7 @@ import numpy as np
 import torch
 from torchdiffeq import odeint
 
-from torchcfm.models.unet.unet import UNetModelWrapper
+from torchlfm.models.unet.unet import UNetModelWrapper
 
 
 def set_determinism(seed: int) -> None:
@@ -128,7 +128,7 @@ def plot_grid(traj: torch.Tensor, col_indices: list, out_path: Path) -> None:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", type=Path, required=True,
-                   help="Path to a torchcfm CIFAR-10 .pt checkpoint")
+                   help="Path to a torchlfm CIFAR-10 .pt checkpoint")
     p.add_argument("--output", type=Path, default=Path("sampling_path.png"))
     p.add_argument("--n-rows", type=int, default=3, help="number of samples")
     p.add_argument("--n-cols", type=int, default=9,

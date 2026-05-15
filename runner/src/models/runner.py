@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from pytorch_lightning import LightningDataModule, LightningModule
 
-from torchcfm import ConditionalFlowMatcher
+from torchlfm import ConditionalFlowMatcher
 
 from .components.augmentation import AugmentationModule
 from .components.distribution_distances import compute_distribution_distances

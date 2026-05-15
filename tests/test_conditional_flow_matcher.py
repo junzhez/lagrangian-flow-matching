@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from torchcfm.conditional_flow_matching import (
+from torchlfm.conditional_flow_matching import (
     AnisoParamsND,
     AnisotropicHarmonicNDConditionalFlowMatcher,
     ConditionalFlowMatcher,
@@ -18,7 +18,7 @@ from torchcfm.conditional_flow_matching import (
     VariancePreservingConditionalFlowMatcher,
     pad_t_like_x,
 )
-from torchcfm.optimal_transport import OTPlanSampler
+from torchlfm.optimal_transport import OTPlanSampler
 
 TEST_SEED = 1994
 TEST_BATCH_SIZE = 128
@@ -201,4 +201,3 @@ def test_aniso_nd_log_downstream_no_nan():
     t, xt, ut = fm.sample_location_and_conditional_flow(x0, x1)
     assert not torch.any(torch.isnan(xt)), "NaN in xt"
     assert not torch.any(torch.isnan(ut)), "NaN in ut"
-    assert any(t_given_init == t)

@@ -21,7 +21,7 @@ import torch
 from cleanfid import fid
 from torchdyn.core import NeuralODE
 
-from torchcfm.models.unet.unet import UNetModelWrapper
+from torchlfm.models.unet.unet import UNetModelWrapper
 
 
 HARMONIC_MODELS = ("harmonic", "otharmonic", "sbharmonic")

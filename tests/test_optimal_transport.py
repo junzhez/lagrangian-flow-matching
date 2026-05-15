@@ -7,7 +7,7 @@ import ot
 import pytest
 import torch
 
-from torchcfm.optimal_transport import OTPlanSampler, wasserstein
+from torchlfm.optimal_transport import OTPlanSampler, wasserstein
 
 ot_sampler = OTPlanSampler(method="exact")
 

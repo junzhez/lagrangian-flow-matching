@@ -17,7 +17,7 @@ from torchvision import datasets, transforms
 from tqdm import trange
 from utils_imagenet import ema, generate_samples, infiniteloop
 
-from torchcfm.conditional_flow_matching import (
+from torchlfm.conditional_flow_matching import (
     AnisoParamsND,
     AnisotropicHarmonicNDConditionalFlowMatcher,
     ConditionalFlowMatcher,
@@ -30,7 +30,7 @@ from torchcfm.conditional_flow_matching import (
     TargetConditionalFlowMatcher,
     VariancePreservingConditionalFlowMatcher,
 )
-from torchcfm.models.unet.unet import UNetModelWrapper
+from torchlfm.models.unet.unet import UNetModelWrapper
 
 FLAGS = flags.FLAGS
 

@@ -11,7 +11,7 @@ from cleanfid import fid
 from torchdiffeq import odeint
 from torchdyn.core import NeuralODE
 
-from torchcfm.models.unet.unet import UNetModelWrapper
+from torchlfm.models.unet.unet import UNetModelWrapper
 
 FLAGS = flags.FLAGS
 

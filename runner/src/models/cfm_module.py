@@ -716,7 +716,7 @@ class VariancePreservingCFM(CFMLitModule):
 class OTHarmonicCFMLitModule(CFMLitModule):
     """OT-CFM with a harmonic (trigonometric) interpolation path between (x0, x1).
 
-    Mirrors torchcfm.ExactOptimalTransportHarmonicConditionalFlowMatcher: pair (x0, x1) via
+    Mirrors torchlfm.ExactOptimalTransportHarmonicConditionalFlowMatcher: pair (x0, x1) via
     exact minibatch OT (handled by the parent's ot_sampler), then interpolate along
     mu_t = cos(omega t) x0 + sin(omega t) (x1 - cos(omega) x0) / sin(omega).
     """

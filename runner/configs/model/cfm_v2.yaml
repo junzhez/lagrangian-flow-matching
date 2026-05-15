@@ -15,7 +15,7 @@ net:
   activation: "selu"
 
 flow_matcher:
-  _target_: torchcfm.ConditionalFlowMatcher
+  _target_: torchlfm.ConditionalFlowMatcher
   sigma: 0.0
 
 solver:

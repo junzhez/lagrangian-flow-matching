@@ -24,7 +24,7 @@ datasets.CIFAR10.url = (
     "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
 )
 
-from torchcfm.conditional_flow_matching import (
+from torchlfm.conditional_flow_matching import (
     ConditionalFlowMatcher,
     ExactOptimalTransportConditionalFlowMatcher,
     ExactOptimalTransportHarmonicConditionalFlowMatcher,
@@ -33,7 +33,7 @@ from torchcfm.conditional_flow_matching import (
     TargetConditionalFlowMatcher,
     VariancePreservingConditionalFlowMatcher,
 )
-from torchcfm.models.unet.unet import UNetModelWrapper
+from torchlfm.models.unet.unet import UNetModelWrapper
 
 FLAGS = flags.FLAGS
 
