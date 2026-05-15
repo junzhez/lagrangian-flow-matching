@@ -1,4 +1,4 @@
-# ImageNet experiments using TorchCFM
+# ImageNet experiments using Lagrangian Flow Matching
 
 This directory contains training scripts for unconditional image generation on ImageNet using flow matching methods. Supported resolutions: **32, 64, 128, 256**.
 
@@ -16,16 +16,16 @@ The script expects a `train/` subdirectory under `--data_dir` in `ImageFolder` f
 
 ### Single GPU
 
+- For the OT-Harmonic Conditional Flow Matching method (recommended):
+
+```bash
+python train_imagenet.py --model otharmonic --img_size 64 --batch_size 256 --total_steps 500001 --save_step 20000
+```
+
 - For the OT-Conditional Flow Matching method:
 
 ```bash
 python train_imagenet.py --model otcfm --img_size 64 --batch_size 256 --total_steps 500001 --save_step 20000
-```
-
-- For the OT-Harmonic Conditional Flow Matching method:
-
-```bash
-python train_imagenet.py --model otharmonic --img_size 64 --batch_size 256 --total_steps 500001 --save_step 20000
 ```
 
 - For the Anisotropic Harmonic method (fits data-driven frequencies before training):
@@ -43,7 +43,7 @@ Use `torchrun` with `train_imagenet_ddp.py`. The `--batch_size` flag is the **to
 ```bash
 torchrun --standalone --nnodes=1 --nproc_per_node=NUM_GPUS_YOU_HAVE \
     train_imagenet_ddp.py \
-    --model otcfm \
+    --model otharmonic \
     --img_size 64 \
     --batch_size 256 \
     --total_steps 500001 \
@@ -61,7 +61,7 @@ To compute the FID score, first build custom stats from real ImageNet images at 
 
 ```bash
 python compute_fid.py \
-    --model otcfm \
+    --model otharmonic \
     --img_size 64 \
     --step 500000 \
     --real_image_dir /path/to/imagenet/val \
@@ -71,13 +71,13 @@ python compute_fid.py \
 On subsequent runs the custom stats are cached, so `--real_image_dir` can be omitted:
 
 ```bash
-python compute_fid.py --model otcfm --img_size 64 --step 500000 --integration_method dopri5
+python compute_fid.py --model otharmonic --img_size 64 --step 500000 --integration_method dopri5
 ```
 
 For Euler integration (faster but less accurate):
 
 ```bash
-python compute_fid.py --model otcfm --img_size 64 --step 500000 --integration_method euler --integration_steps 100
+python compute_fid.py --model otharmonic --img_size 64 --step 500000 --integration_method euler --integration_steps 100
 ```
 
 ## Key Hyperparameters
@@ -94,36 +94,17 @@ python compute_fid.py --model otcfm --img_size 64 --step 500000 --integration_me
 | `--sigma` | 0.0 | Flow noise std (sbharmonic needs > 0) |
 | `--omega` | 1.0 | Frequency for harmonic matchers |
 
-If you find this code useful in your research, please cite the following papers (expand for BibTeX):
+## Citation
 
-<details>
-<summary>
-A. Tong, N. Malkin, G. Huguet, Y. Zhang, J. Rector-Brooks, K. Fatras, G. Wolf, Y. Bengio. Improving and Generalizing Flow-Based Generative Models with Minibatch Optimal Transport, 2023.
-</summary>
+If you find this code useful in your research, please cite:
 
 ```bibtex
-@article{tong2023improving,
-  title={Improving and Generalizing Flow-Based Generative Models with Minibatch Optimal Transport},
-  author={Tong, Alexander and Malkin, Nikolay and Huguet, Guillaume and Zhang, Yanlei and {Rector-Brooks}, Jarrid and Fatras, Kilian and Wolf, Guy and Bengio, Yoshua},
-  year={2023},
-  journal={arXiv preprint 2302.00482}
+@misc{du2026lagrangian,
+  title  = {Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design},
+  author = {Du, Shukai* and Zhang, Junzhe* and Li, Yiming},
+  year   = {2026},
+  note   = {*Equal contribution. Preprint forthcoming. https://github.com/junzhez/lagrangian-flow-matching}
 }
 ```
 
-</details>
-
-<details>
-<summary>
-A. Tong, N. Malkin, K. Fatras, L. Atanackovic, Y. Zhang, G. Huguet, G. Wolf, Y. Bengio. Simulation-Free Schrödinger Bridges via Score and Flow Matching, 2023.
-</summary>
-
-```bibtex
-@article{tong2023simulation,
-   title={Simulation-Free Schr{\"o}dinger Bridges via Score and Flow Matching},
-   author={Tong, Alexander and Malkin, Nikolay and Fatras, Kilian and Atanackovic, Lazar and Zhang, Yanlei and Huguet, Guillaume and Wolf, Guy and Bengio, Yoshua},
-   year={2023},
-   journal={arXiv preprint 2307.03672}
-}
-```
-
-</details>
+This work builds on the [TorchCFM](https://github.com/atong01/conditional-flow-matching) library by Tong, Fatras et al.; see the [project README](../../../README.md#how-to-cite) for those citations.

@@ -114,8 +114,8 @@ def parse_args() -> argparse.Namespace:
                    help="comma-separated Euler NFE values (default: 4,8,16,32,64,128)")
     p.add_argument("--models", type=str, default=",".join(DEFAULT_MODELS),
                    help="comma-separated model names (default: otcfm,otharmonic)")
-    p.add_argument("--omega", type=float, default=0.001,
-                   help="omega for harmonic-family models (default: 0.001)")
+    p.add_argument("--omega", type=float, default=1,
+                   help="omega for harmonic-family models (default: 1)")
     p.add_argument("--out-dir", type=Path, default=Path("plots/fid_vs_nfe"))
     p.add_argument("--results-file", type=Path, default=None)
     p.add_argument("--recompute", action="store_true",

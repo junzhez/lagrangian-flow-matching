@@ -989,11 +989,11 @@ class HarmonicConditionalFlowMatcher(ConditionalFlowMatcher):
     sigma : Union[float, int]
         Noise standard deviation (default 0.0 for deterministic harmonic path).
     omega : Union[float, int]
-        Harmonic interpolation parameter in radians (default pi/2).
+        Harmonic interpolation parameter in radians (default 1).
         Must satisfy sin(omega) != 0 (i.e., omega != 0, pi, 2*pi, ...).
     """
 
-    def __init__(self, sigma: Union[float, int] = 0.0, omega: Union[float, int] = math.pi / 2):
+    def __init__(self, sigma: Union[float, int] = 0.0, omega: Union[float, int] = 1):
         super().__init__(sigma)
         if abs(math.sin(float(omega))) < 1e-8:
             raise ValueError(
@@ -1063,10 +1063,10 @@ class ExactOptimalTransportHarmonicConditionalFlowMatcher(HarmonicConditionalFlo
     sigma : Union[float, int]
         Noise standard deviation (default 0.0).
     omega : Union[float, int]
-        Harmonic interpolation parameter in radians (default pi/2).
+        Harmonic interpolation parameter in radians (default 1).
     """
 
-    def __init__(self, sigma: Union[float, int] = 0.0, omega: Union[float, int] = math.pi / 2):
+    def __init__(self, sigma: Union[float, int] = 0.0, omega: Union[float, int] = 1):
         super().__init__(sigma=sigma, omega=omega)
         self.ot_sampler = OTPlanSampler(
             method="exact",
@@ -1106,7 +1106,7 @@ class SchrodingerBridgeHarmonicConditionalFlowMatcher(HarmonicConditionalFlowMat
     def __init__(
         self,
         sigma: Union[float, int] = 1.0,
-        omega: Union[float, int] = math.pi / 2,
+        omega: Union[float, int] = 1,
         ot_method: str = "exact",
     ):
         if sigma <= 0:

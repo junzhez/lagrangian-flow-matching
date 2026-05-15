@@ -721,7 +721,7 @@ class OTHarmonicCFMLitModule(CFMLitModule):
     mu_t = cos(omega t) x0 + sin(omega t) (x1 - cos(omega) x0) / sin(omega).
     """
 
-    def __init__(self, *args, omega: float = math.pi / 2, **kwargs):
+    def __init__(self, *args, omega: float = 1, **kwargs):
         super().__init__(*args, **kwargs)
         if abs(math.sin(float(omega))) < 1e-8:
             raise ValueError(

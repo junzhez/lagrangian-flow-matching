@@ -35,12 +35,12 @@ so source and target points are paired by least action rather than least Euclide
 
 ## Method overview
 
-`ExactOptimalTransportHarmonicConditionalFlowMatcher(sigma=0.0, omega=π/2)` runs in two steps per minibatch:
+`ExactOptimalTransportHarmonicConditionalFlowMatcher(sigma=0.0, omega=1)` runs in two steps per minibatch:
 
 1. **Couple by least action.** Solve the exact OT plan between `x₀` and `x₁` using the harmonic action `S(x₀, x₁)` above as the pairwise cost matrix.
 2. **Interpolate along the harmonic path.** Sample `t ∼ U(0, 1)` and return `(t, x_t = μ_t(x₀, x₁), u_t = u_t(x₀, x₁))` for the standard flow-matching regression loss.
 
-`omega` controls how strongly the harmonic action penalizes long-range transport relative to the Euclidean baseline; the default `π/2` recovers a sinusoidal interpolation with `sin ω = 1`. For data-adaptive per-direction frequencies (PCA-derived eigenbasis, multi-ω Mehler kernel), see [`torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher`](./torchlfm/conditional_flow_matching.py) and [`torchlfm.AnisoParamsND`](./torchlfm/conditional_flow_matching.py).
+`omega` controls how strongly the harmonic action penalizes long-range transport relative to the Euclidean baseline; the default `omega = 1` is a well-conditioned mid-range frequency (sin 1 ≈ 0.84). For data-adaptive per-direction frequencies (PCA-derived eigenbasis, multi-ω Mehler kernel), see [`torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher`](./torchlfm/conditional_flow_matching.py) and [`torchlfm.AnisoParamsND`](./torchlfm/conditional_flow_matching.py).
 
 End-to-end demonstrations:
 
@@ -56,7 +56,7 @@ End-to-end demonstrations:
 - `TargetConditionalFlowMatcher`: $z = x_1$, $q(z) = q(x_1)$ — Lipman et al. 2023 style flow from a standard Gaussian to data.
 - `SchrodingerBridgeConditionalFlowMatcher`: entropically regularized OT plan; the basis for SB-CFM and \[SF\]²M.
 - `VariancePreservingConditionalFlowMatcher`: variance-preserving trigonometric interpolation (Albergo et al. 2023a).
-- `HarmonicConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = q(x_0) q(x_1)$ with the harmonic interpolation `μ_t` above (default `omega = π/2`).
+- `HarmonicConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = q(x_0) q(x_1)$ with the harmonic interpolation `μ_t` above (default `omega = 1`).
 - `ExactOptimalTransportHarmonicConditionalFlowMatcher`: combines exact-OT minibatch coupling under the harmonic action `S` with the harmonic interpolation — **the primary lagrangian flow-matching loss**.
 - `AnisotropicHarmonicNDConditionalFlowMatcher`: data-adaptive per-direction frequencies via `AnisoParamsND.from_data(...)`; Mehler-kernel cost in the eigenbasis of Ω².
 
@@ -161,7 +161,7 @@ from torchlfm import ExactOptimalTransportHarmonicConditionalFlowMatcher
 x0 = torch.randn(256, 2)             # source samples
 x1 = torch.randn(256, 2) + 3.0       # target samples
 
-fm = ExactOptimalTransportHarmonicConditionalFlowMatcher(sigma=0.0)  # omega = π/2 by default
+fm = ExactOptimalTransportHarmonicConditionalFlowMatcher(sigma=0.0)  # omega = 1 by default
 t, xt, ut = fm.sample_location_and_conditional_flow(x0, x1)
 # `xt` is the harmonic interpolant at time `t`; `ut` is the conditional velocity to regress.
 ```
