@@ -24,7 +24,7 @@ setup(
     name="torchlfm",
     version=version,
     description="Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design.",
-    author="Junzhe Zhang, Shukai Du",
+    author="Shukai Du, Junzhe Zhang, Yiming Li",
     author_email="jzhan403@syr.edu, sdu113@syr.edu",
     url="https://github.com/junzhez/lagrangian-flow-matching",
     install_requires=install_requires,

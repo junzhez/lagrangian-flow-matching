@@ -11,30 +11,36 @@
 
 ## Description
 
-**Lagrangian Flow Matching** generalizes Conditional Flow Matching (CFM) by replacing the Euclidean action that defines the source–target coupling with an **anisotropic, harmonic-oscillator action**. The choice of coupling π(x₀, x₁) determines which source points are paired with which target points; standard OT minimizes ½‖x₁ − x₀‖², while we minimize a metric-aware action
+**Lagrangian Flow Matching** generalizes Conditional Flow Matching (CFM) by replacing the linear interpolation between source and target with the analytic trajectory of a harmonic oscillator, and by replacing the Euclidean coupling cost ½‖x₁ − x₀‖² with the corresponding harmonic action. Both pieces are exposed as a single drop-in loss class: [`torchlfm.ExactOptimalTransportHarmonicConditionalFlowMatcher`](./torchlfm/conditional_flow_matching.py).
+
+For a scalar frequency ω ∈ (0, π), the conditional probability path is
 
 ```
-S(x₀, x₁) = Σₖ (ωₖ / 2 sin ωₖ) · [ (x̃₀ᵏ² + x̃₁ᵏ²) cos ωₖ − 2 x̃₀ᵏ x̃₁ᵏ ]
+μ_t(x₀, x₁) = cos(ωt)·x₀ + sin(ωt) · (x₁ − cos(ω)·x₀) / sin(ω)
 ```
 
-where x̃ = R x are coordinates in the eigenbasis of Ω². Transport across high-frequency directions is penalized more than transport along low-frequency ones, so the coupling preferentially pairs source points with nearby target points in the **anisotropic metric** rather than the Euclidean one. The result is straighter, lower-action probability paths and higher-fidelity generation under the same simulation-free training objective.
+with closed-form conditional velocity
 
-The reference implementation lives in [`torchlfm.AnisoParamsND`](./torchlfm/conditional_flow_matching.py) and [`torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher`](./torchlfm/conditional_flow_matching.py). The package `torchlfm` reuses and extends the flow-matching loss classes from TorchCFM ([Tong et al. 2024](https://arxiv.org/abs/2302.00482)) so existing CFM/OT-CFM/SF²M code paths continue to work.
+```
+u_t(x₀, x₁) = −ω·x₀·sin(ωt) + ω·cos(ωt) · (x₁ − cos(ω)·x₀) / sin(ω).
+```
 
-<p align="center">
-<img src="assets/169_generated_samples_otcfm.png" width="600"/>
-<img src="assets/8gaussians-to-moons.gif" />
-</p>
+The minibatch coupling π(x₀, x₁) is solved as an exact OT problem under the harmonic-oscillator action
+
+```
+S(x₀, x₁) = (ω / 2 sin ω) · [ (‖x₀‖² + ‖x₁‖²) · cos ω − 2 ⟨x₀, x₁⟩ ]
+```
+
+so source and target points are paired by least action rather than least Euclidean distance. The result is straighter, lower-action probability paths and higher-fidelity generation under the same simulation-free training objective. The package builds on TorchCFM ([Tong et al. 2024](https://arxiv.org/abs/2302.00482)), so existing CFM / OT-CFM / SF²M code paths continue to work.
 
 ## Method overview
 
-Three coupling strategies are supported (Random / Euclidean OT / Action OT):
+`ExactOptimalTransportHarmonicConditionalFlowMatcher(sigma=0.0, omega=π/2)` runs in two steps per minibatch:
 
-1. **Random** — π = ρ₀ ⊗ ρ₁ (independent samples, no coupling optimization).
-2. **Euclidean OT** — minimize 𝔼[½ ‖x₁ − x₀‖²] (standard OT-CFM).
-3. **Action OT (ours)** — minimize 𝔼[S(x₀, x₁)] under the anisotropic harmonic action.
+1. **Couple by least action.** Solve the exact OT plan between `x₀` and `x₁` using the harmonic action `S(x₀, x₁)` above as the pairwise cost matrix.
+2. **Interpolate along the harmonic path.** Sample `t ∼ U(0, 1)` and return `(t, x_t = μ_t(x₀, x₁), u_t = u_t(x₀, x₁))` for the standard flow-matching regression loss.
 
-The anisotropic parameters Ω = R diag(ω₁, …, ω_d) Rᵀ can be set manually or inferred from the data covariance via `AnisoParamsND.from_data(...)`. Given a coupling, `AnisotropicHarmonicNDConditionalFlowMatcher` provides the conditional interpolant and velocity used in the standard flow-matching loss.
+`omega` controls how strongly the harmonic action penalizes long-range transport relative to the Euclidean baseline; the default `π/2` recovers a sinusoidal interpolation with `sin ω = 1`. For data-adaptive per-direction frequencies (PCA-derived eigenbasis, multi-ω Mehler kernel), see [`torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher`](./torchlfm/conditional_flow_matching.py) and [`torchlfm.AnisoParamsND`](./torchlfm/conditional_flow_matching.py).
 
 End-to-end demonstrations:
 
@@ -50,19 +56,22 @@ End-to-end demonstrations:
 - `TargetConditionalFlowMatcher`: $z = x_1$, $q(z) = q(x_1)$ — Lipman et al. 2023 style flow from a standard Gaussian to data.
 - `SchrodingerBridgeConditionalFlowMatcher`: entropically regularized OT plan; the basis for SB-CFM and \[SF\]²M.
 - `VariancePreservingConditionalFlowMatcher`: variance-preserving trigonometric interpolation (Albergo et al. 2023a).
+- `HarmonicConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = q(x_0) q(x_1)$ with the harmonic interpolation `μ_t` above (default `omega = π/2`).
+- `ExactOptimalTransportHarmonicConditionalFlowMatcher`: combines exact-OT minibatch coupling under the harmonic action `S` with the harmonic interpolation — **the primary lagrangian flow-matching loss**.
+- `AnisotropicHarmonicNDConditionalFlowMatcher`: data-adaptive per-direction frequencies via `AnisoParamsND.from_data(...)`; Mehler-kernel cost in the eigenbasis of Ω².
 
-The lagrangian / anisotropic action couplings are demonstrated in the tutorials above.
+These lagrangian flow-matching variants are demonstrated in the tutorials above.
 
 ## How to cite
 
 If you use Lagrangian Flow Matching in your research, please cite:
 
 ```bibtex
-@misc{zhang2026lagrangian,
+@misc{du2026lagrangian,
   title  = {Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design},
-  author = {Zhang, Junzhe and Du, Shukai},
+  author = {Du, Shukai* and Zhang, Junzhe* and Li, Yiming},
   year   = {2026},
-  note   = {Equal contribution. Preprint forthcoming. https://github.com/junzhez/lagrangian-flow-matching}
+  note   = {*Equal contribution. Preprint forthcoming. https://github.com/junzhez/lagrangian-flow-matching}
 }
 ```
 
@@ -107,7 +116,7 @@ A. Tong, N. Malkin, K. Fatras, L. Atanackovic, Y. Zhang, G. Huguet, G. Wolf, Y. 
 
 ## Implemented papers
 
-- **Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design** (Zhang & Du 2026, this work) — `torchlfm.AnisoParamsND`, `torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher`
+- **Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design** (Du, Zhang & Li 2026, this work) — `torchlfm.ExactOptimalTransportHarmonicConditionalFlowMatcher` (isotropic), `torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher` (data-adaptive)
 - Improving and Generalizing Flow-Based Generative Models with Minibatch Optimal Transport (Tong et al. 2024) [Paper](https://arxiv.org/abs/2302.00482)
 - Simulation-Free Schrödinger Bridges via Score and Flow Matching (Tong et al. 2023) [Paper](https://arxiv.org/abs/2307.03672)
 - Flow Matching for Generative Modeling (Lipman et al. 2023) [Paper](https://openreview.net/forum?id=PqvMRDCJT9t)
@@ -147,17 +156,17 @@ python -m ipykernel install --user --name=torchlfm
 
 ```python
 import torch
-from torchlfm import ConditionalFlowMatcher, ExactOptimalTransportConditionalFlowMatcher
+from torchlfm import ExactOptimalTransportHarmonicConditionalFlowMatcher
 
 x0 = torch.randn(256, 2)             # source samples
 x1 = torch.randn(256, 2) + 3.0       # target samples
 
-fm = ExactOptimalTransportConditionalFlowMatcher(sigma=0.0)
+fm = ExactOptimalTransportHarmonicConditionalFlowMatcher(sigma=0.0)  # omega = π/2 by default
 t, xt, ut = fm.sample_location_and_conditional_flow(x0, x1)
-# `xt` is the interpolated sample at time `t`; `ut` is the conditional velocity to regress.
+# `xt` is the harmonic interpolant at time `t`; `ut` is the conditional velocity to regress.
 ```
 
-For the lagrangian / action-OT variant, see `torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher` and `torchlfm.AnisoParamsND` in `torchlfm/conditional_flow_matching.py`.
+For data-adaptive per-direction frequencies, swap in `torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher` (see `torchlfm/conditional_flow_matching.py`).
 
 ## Project structure
 
@@ -182,7 +191,7 @@ For the lagrangian / action-OT variant, see `torchlfm.AnisotropicHarmonicNDCondi
 
 ## Contributions
 
-- Lagrangian flow matching (equal contribution): [Junzhe Zhang](https://github.com/junzhez), [Shukai Du](https://shukaidu.github.io/)
+- Lagrangian flow matching: [Shukai Du](https://shukaidu.github.io/)\*, [Junzhe Zhang](https://github.com/junzhez)\*, Yiming Li (\*equal contribution)
 - Original TorchCFM library and CFM/OT-CFM/SF²M implementations: [Alexander Tong](http://alextong.net), [Kilian Fatras](http://kilianfatras.github.io)
 
 Suggestions and pull requests are welcome. Before opening an issue, please confirm:
@@ -197,7 +206,7 @@ Lagrangian Flow Matching is released under the MIT License. See [`LICENSE`](./LI
 ```
 MIT License
 
-Copyright (c) 2026 Junzhe Zhang, Shukai Du
+Copyright (c) 2026 Junzhe Zhang, Shukai Du, Yiming Li
 Copyright (c) 2023 Alexander Tong (TorchCFM, on which this work builds)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
