@@ -217,5 +217,9 @@ __marimo__/
 *.zip
 *.h5ad
 
+# Private example code (kept local, not pushed)
+/examples/images/imagenet/
+/examples/images/flowers/
+
 # macOS
 .DS_Store
