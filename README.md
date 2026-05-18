@@ -1,8 +1,6 @@
 <div align="center">
 
-# Lagrangian Flow Matching
-
-### A least-action framework for principled path design
+# Lagrangian Flow Matching: A least-action framework for principled path design
 
 [![pytorch](https://img.shields.io/badge/PyTorch_1.11+-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/get-started/locally/)
 [![license](https://img.shields.io/badge/License-MIT-green.svg?labelColor=gray)](#license)
@@ -31,7 +29,7 @@ The minibatch coupling π(x₀, x₁) is solved as an exact OT problem under the
 S(x₀, x₁) = (ω / 2 sin ω) · [ (‖x₀‖² + ‖x₁‖²) · cos ω − 2 ⟨x₀, x₁⟩ ]
 ```
 
-so source and target points are paired by least action rather than least Euclidean distance. The result is straighter, lower-action probability paths and higher-fidelity generation under the same simulation-free training objective. The package builds on TorchCFM ([Tong et al. 2024](https://arxiv.org/abs/2302.00482)), so existing CFM / OT-CFM / SF²M code paths continue to work.
+so source and target points are paired by least action rather than least Euclidean distance. The result is lower-action probability paths — curved trajectories that follow the harmonic geometry rather than straight lines — and higher-fidelity generation under the same simulation-free training objective. The package builds on TorchCFM ([Tong et al. 2024](https://arxiv.org/abs/2302.00482)), so existing CFM / OT-CFM / SF²M code paths continue to work.
 
 ## Method overview
 
@@ -40,7 +38,7 @@ so source and target points are paired by least action rather than least Euclide
 1. **Couple by least action.** Solve the exact OT plan between `x₀` and `x₁` using the harmonic action `S(x₀, x₁)` above as the pairwise cost matrix.
 2. **Interpolate along the harmonic path.** Sample `t ∼ U(0, 1)` and return `(t, x_t = μ_t(x₀, x₁), u_t = u_t(x₀, x₁))` for the standard flow-matching regression loss.
 
-`omega` controls how strongly the harmonic action penalizes long-range transport relative to the Euclidean baseline; the default `omega = 1` is a well-conditioned mid-range frequency (sin 1 ≈ 0.84). For data-adaptive per-direction frequencies (PCA-derived eigenbasis, multi-ω Mehler kernel), see [`torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher`](./torchlfm/conditional_flow_matching.py) and [`torchlfm.AnisoParamsND`](./torchlfm/conditional_flow_matching.py).
+`omega` controls how strongly the harmonic action penalizes long-range transport relative to the Euclidean baseline; the default `omega = 1` is a well-conditioned mid-range frequency (sin 1 ≈ 0.84). For data-adaptive per-direction frequencies (PCA-derived eigenbasis, multi-ω Mehler kernel), see [`torchlfm.AnisotropicHarmonicConditionalFlowMatcher`](./torchlfm/conditional_flow_matching.py) and [`torchlfm.AnisoParams`](./torchlfm/conditional_flow_matching.py).
 
 End-to-end demonstrations:
 
@@ -58,7 +56,7 @@ End-to-end demonstrations:
 - `VariancePreservingConditionalFlowMatcher`: variance-preserving trigonometric interpolation (Albergo et al. 2023a).
 - `HarmonicConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = q(x_0) q(x_1)$ with the harmonic interpolation `μ_t` above (default `omega = 1`).
 - `ExactOptimalTransportHarmonicConditionalFlowMatcher`: combines exact-OT minibatch coupling under the harmonic action `S` with the harmonic interpolation — **the primary lagrangian flow-matching loss**.
-- `AnisotropicHarmonicNDConditionalFlowMatcher`: data-adaptive per-direction frequencies via `AnisoParamsND.from_data(...)`; Mehler-kernel cost in the eigenbasis of Ω².
+- `AnisotropicHarmonicConditionalFlowMatcher`: data-adaptive per-direction frequencies via `AnisoParams.from_data(...)`; Mehler-kernel cost in the eigenbasis of Ω².
 
 These lagrangian flow-matching variants are demonstrated in the tutorials above.
 
@@ -68,10 +66,14 @@ If you use Lagrangian Flow Matching in your research, please cite:
 
 ```bibtex
 @misc{du2026lagrangian,
-  title  = {Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design},
-  author = {Du, Shukai* and Zhang, Junzhe* and Li, Yiming},
-  year   = {2026},
-  note   = {*Equal contribution. Preprint forthcoming. https://github.com/junzhez/lagrangian-flow-matching}
+  title         = {Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design},
+  author        = {Du, Shukai* and Zhang, Junzhe* and Li, Yiming},
+  year          = {2026},
+  eprint        = {2605.15419},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2605.15419},
+  note          = {*Equal contribution. https://github.com/junzhez/lagrangian-flow-matching}
 }
 ```
 
@@ -116,7 +118,7 @@ A. Tong, N. Malkin, K. Fatras, L. Atanackovic, Y. Zhang, G. Huguet, G. Wolf, Y. 
 
 ## Implemented papers
 
-- **Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design** (Du, Zhang & Li 2026, this work) — `torchlfm.ExactOptimalTransportHarmonicConditionalFlowMatcher` (isotropic), `torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher` (data-adaptive)
+- **Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design** (Du, Zhang & Li 2026, this work) [Paper](https://arxiv.org/abs/2605.15419) — `torchlfm.ExactOptimalTransportHarmonicConditionalFlowMatcher` (isotropic), `torchlfm.AnisotropicHarmonicConditionalFlowMatcher` (data-adaptive)
 - Improving and Generalizing Flow-Based Generative Models with Minibatch Optimal Transport (Tong et al. 2024) [Paper](https://arxiv.org/abs/2302.00482)
 - Simulation-Free Schrödinger Bridges via Score and Flow Matching (Tong et al. 2023) [Paper](https://arxiv.org/abs/2307.03672)
 - Flow Matching for Generative Modeling (Lipman et al. 2023) [Paper](https://openreview.net/forum?id=PqvMRDCJT9t)
@@ -166,7 +168,7 @@ t, xt, ut = fm.sample_location_and_conditional_flow(x0, x1)
 # `xt` is the harmonic interpolant at time `t`; `ut` is the conditional velocity to regress.
 ```
 
-For data-adaptive per-direction frequencies, swap in `torchlfm.AnisotropicHarmonicNDConditionalFlowMatcher` (see `torchlfm/conditional_flow_matching.py`).
+For data-adaptive per-direction frequencies, swap in `torchlfm.AnisotropicHarmonicConditionalFlowMatcher` (see `torchlfm/conditional_flow_matching.py`).
 
 ## Project structure
 
@@ -182,7 +184,6 @@ For data-adaptive per-direction frequencies, swap in `torchlfm.AnisotropicHarmon
 │   ├── images/                   <- MNIST / CIFAR-10 / Flowers / ImageNet training scripts
 │   ├── single_cell/              <- Single-cell trajectory inference
 │   └── tabular/                  <- Tabular generation (XGBoost CFM)
-├── runner/                       <- Lightning + Hydra training harness (legacy V0)
 ├── tests/
 ├── requirements.txt
 ├── setup.py

@@ -4,9 +4,9 @@ Methods: OT-CFM, OT-Harmonic (ω=0.001/1/π/2), Stochastic Interpolant
 Metrics: W_2, |NPE-1| (Euclidean-normalized), |NPE_ω=1-1| (harmonic-normalized)
 
 Usage:
-    python compare_methods_normal_to_8gaussian.py
-    python compare_methods_normal_to_8gaussian.py --src normal --tgt moons
-    python compare_methods_normal_to_8gaussian.py --src 8gaussian --tgt scurve
+    python compare_methods_synthetic.py
+    python compare_methods_synthetic.py --src normal --tgt moons
+    python compare_methods_synthetic.py --src 8gaussian --tgt scurve
 
 Distributions: normal, 8gaussian, moons, scurve
 """

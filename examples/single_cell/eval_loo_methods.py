@@ -8,9 +8,8 @@ the remaining timepoints (treated as evenly spaced via renumbering), integrate
 from the earliest surviving timepoint up to the renumbered position of the
 held-out one, and compute the 1-Wasserstein distance to the held-out cells.
 
-Per-seed scalar = mean W1 across timepoints (mirrors runner's
-distribution_distances.py:72). Final 'mean ± std' is across --seeds
-(default 42..46, matching runner/scripts/two-dim-cfm.sh).
+Per-seed scalar = mean W1 across timepoints. Final 'mean ± std' is across
+--seeds (default 42..46).
 
 Usage:
     python examples/single_cell/eval_loo_methods.py
@@ -54,8 +53,7 @@ INTEGRATION_STEPS = 100
 def _seed_all(seed: int) -> None:
     """Seed python, numpy and torch (CPU + all CUDA devices) deterministically.
 
-    Mirrors pl.seed_everything(seed, workers=True) used by Tong's runner
-    (runner/src/train.py:64).
+    Equivalent to pl.seed_everything(seed, workers=True).
     """
     seed = seed % (2**32)
     random.seed(seed)
@@ -66,12 +64,11 @@ def _seed_all(seed: int) -> None:
 
 
 def runner_match_n_iter(X, batch_size: int, max_epochs: int) -> int:
-    """Effective optimizer-step count of Tong's runner on the same trajectory data.
+    """Effective optimizer-step count for an epoch-based budget on trajectory data.
 
-    The runner's CombinedLoader(mode="min_size") (distribution_datamodule.py:80) yields
-    one batch per timepoint per step over the 80% train split, so steps/epoch is
-    min_t(int(TRAIN_FRAC * |X_t|) // batch_size). Per-step gradient work matches
-    get_batch_loo, so matching n_iter to runner_steps matches total training work.
+    A min-size combined loader yields one batch per timepoint per step over the
+    80% train split, so steps/epoch is min_t(int(TRAIN_FRAC * |X_t|) //
+    batch_size) and n_iter = max_epochs * steps_per_epoch matches that budget.
     """
     steps_per_epoch = max(1, min(int(TRAIN_FRAC * Xt.shape[0]) // batch_size for Xt in X))
     return max_epochs * steps_per_epoch
@@ -181,14 +178,14 @@ def main():
     parser.add_argument("--held-out", type=int, nargs="+", default=None,
                         help="Override interior timepoints to leave out (default: all interior per dataset)")
     parser.add_argument("--max-epochs", type=int, default=MAX_EPOCHS_DEFAULT,
-                        help="Runner-equivalent epochs; n_iter is computed per dataset as "
+                        help="Training epochs; n_iter is computed per dataset as "
                              "max_epochs * min_t(int(0.8 * |X_t|) // batch_size).")
     parser.add_argument("--n-iter", type=int, default=None,
                         help="Optional explicit override of training iterations; "
                              "if set, supersedes --max-epochs.")
     parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44, 45, 46],
                         help="Independent training seeds; mean ± std is reported across "
-                             "these seeds (mirrors runner/scripts/two-dim-cfm.sh).")
+                             "these seeds.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -261,8 +258,7 @@ def main():
                 t_mean = float(vals.mean())
                 t_std = float(vals.std(ddof=1)) if n_seeds > 1 else 0.0
                 per_t_cells.append(f"{t_mean:.4f} ± {t_std:.4f}")
-            # Per-seed scalar = mean across timepoints (mirrors
-            # runner/src/models/components/distribution_distances.py:72).
+            # Per-seed scalar = mean across timepoints.
             per_seed_scalars = np.array(
                 [np.mean([ds_results[name][h][s] for h in held_out])
                  for s in range(n_seeds)]
@@ -276,8 +272,7 @@ def main():
     print(f"\nLower W1 is better. Per-timepoint columns show 'mean ± std' across {n_seeds} "
           f"seeds at that t (sample std, ddof=1). Final 'mean ± std' is across {n_seeds} "
           f"independent training seeds, each summarizing W1 averaged over held-out timepoints "
-          f"(sample std, ddof=1). Mirrors Tong's protocol (runner/scripts/two-dim-cfm.sh, "
-          f"distribution_distances.py:72).")
+          f"(sample std, ddof=1).")
 
 
 if __name__ == "__main__":

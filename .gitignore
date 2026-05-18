@@ -220,6 +220,15 @@ __marimo__/
 # Private example code (kept local, not pushed)
 /examples/images/imagenet/
 /examples/images/flowers/
+/examples/images/cifar10/algorithms.py
+/examples/images/cifar10/eval_fid_table.py
+/examples/images/cifar10/plot_fid_vs_nfe.py
+/examples/images/cifar10/sample_grid_cifar10.py
+/examples/images/cifar10/sample_path_cifar10.py
+/examples/images/cifar10/scaffold_results.py
+/examples/images/cifar10/sweep_sample_grid.py
+/examples/2D_tutorials/plot_w2_vs_nfe.py
+/examples/2D_tutorials/plot_moons_to_checkerboard.ipynb
 
 # macOS
 .DS_Store
