@@ -35,7 +35,7 @@ so source and target points are paired by least action rather than least Euclide
 <img src="assets/8gaussians-to-moons_harmonic.gif" />
 </p>
 
-The density, vector field, and trajectories of simulation-free flow-matching schemes mapping 8 Gaussians to two moons, comparing OT-CFM, OT-Harmonic (ω = 0.01, 1, π/2), the OT stochastic interpolant, and the anisotropic harmonic path. The probability path above is produced by the [`examples/2D_tutorials/plot_8gaussian_paths.ipynb`](./examples/2D_tutorials/plot_8gaussian_paths.ipynb) notebook.
+The density, vector field, and trajectories of simulation-free flow-matching schemes mapping 8 Gaussians to two moons, comparing OT-CFM, OT-Harmonic (ω = 0.01, 1, π/2), the OT stochastic interpolant, and the anisotropic harmonic path. The probability paths above are produced by the [`examples/2D_tutorials/plot_8gaussian_paths.ipynb`](./examples/2D_tutorials/plot_8gaussian_paths.ipynb) notebook.
 
 ## Method overview
 
