@@ -130,7 +130,7 @@ A. Tong, N. Malkin, K. Fatras, L. Atanackovic, Y. Zhang, G. Huguet, G. Wolf, Y. 
 
 ## Implemented papers
 
-- **Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design** (Du, Zhang & Li 2026, this work) [Paper](https://arxiv.org/abs/2605.15419) — `torchlfm.ExactOptimalTransportHarmonicConditionalFlowMatcher` (isotropic), `torchlfm.AnisotropicHarmonicConditionalFlowMatcher` (data-adaptive)
+- **Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design** (Du, Zhang & Li 2026, this work) [Paper](https://arxiv.org/abs/2605.15419) — `torchlfm.ExactOptimalTransportHarmonicConditionalFlowMatcher` (isotropic), `torchlfm.ExactOptimalTransportAnisotropicHarmonicConditionalFlowMatcher` (data-adaptive)
 - Improving and Generalizing Flow-Based Generative Models with Minibatch Optimal Transport (Tong et al. 2024) [Paper](https://arxiv.org/abs/2302.00482)
 - Simulation-Free Schrödinger Bridges via Score and Flow Matching (Tong et al. 2023) [Paper](https://arxiv.org/abs/2307.03672)
 - Flow Matching for Generative Modeling (Lipman et al. 2023) [Paper](https://openreview.net/forum?id=PqvMRDCJT9t)
