@@ -60,6 +60,7 @@ End-to-end demonstrations:
 - `ExactOptimalTransportHarmonicConditionalFlowMatcher`: combines exact-OT minibatch coupling under the harmonic action `S` with the harmonic interpolation — **the primary lagrangian flow-matching loss**.
 - `HarmonicConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = q(x_0) q(x_1)$ with the harmonic interpolation `μ_t` above (default `omega = 1`).
 - `AnisotropicHarmonicConditionalFlowMatcher`: data-adaptive per-direction frequencies via `AnisoParams.from_data(...)`; Mehler-kernel cost in the eigenbasis of Ω².
+- `ExactOptimalTransportAnisotropicHarmonicConditionalFlowMatcher`: the action-OT counterpart of the above — exact minibatch OT coupling under the anisotropic harmonic action `S` in the PCA eigenbasis.
 
 These lagrangian flow-matching variants are demonstrated in the tutorials above.
 
