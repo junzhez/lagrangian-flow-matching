@@ -53,18 +53,23 @@ End-to-end demonstrations:
 
 ## The `torchlfm` package
 
-`torchlfm` exposes the same loss-function abstraction over the choice of conditional distribution `q(z)` that TorchCFM introduced, with the lagrangian variants layered on top:
+`torchlfm` exposes the same loss-function abstraction over the choice of conditional distribution `q(z)` that TorchCFM introduced, with the lagrangian variants layered on top.
+
+**Lagrangian flow matching (this work):**
+
+- `ExactOptimalTransportHarmonicConditionalFlowMatcher`: combines exact-OT minibatch coupling under the harmonic action `S` with the harmonic interpolation — **the primary lagrangian flow-matching loss**.
+- `HarmonicConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = q(x_0) q(x_1)$ with the harmonic interpolation `μ_t` above (default `omega = 1`).
+- `AnisotropicHarmonicConditionalFlowMatcher`: data-adaptive per-direction frequencies via `AnisoParams.from_data(...)`; Mehler-kernel cost in the eigenbasis of Ω².
+
+These lagrangian flow-matching variants are demonstrated in the tutorials above.
+
+**Inherited from TorchCFM (baselines):**
 
 - `ConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = q(x_0) q(x_1)$
 - `ExactOptimalTransportConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = \pi(x_0, x_1)$ where $\pi$ is an exact OT joint (OT-CFM).
 - `TargetConditionalFlowMatcher`: $z = x_1$, $q(z) = q(x_1)$ — Lipman et al. 2023 style flow from a standard Gaussian to data.
 - `SchrodingerBridgeConditionalFlowMatcher`: entropically regularized OT plan; the basis for SB-CFM and \[SF\]²M.
 - `VariancePreservingConditionalFlowMatcher`: variance-preserving trigonometric interpolation (Albergo et al. 2023a).
-- `HarmonicConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = q(x_0) q(x_1)$ with the harmonic interpolation `μ_t` above (default `omega = 1`).
-- `ExactOptimalTransportHarmonicConditionalFlowMatcher`: combines exact-OT minibatch coupling under the harmonic action `S` with the harmonic interpolation — **the primary lagrangian flow-matching loss**.
-- `AnisotropicHarmonicConditionalFlowMatcher`: data-adaptive per-direction frequencies via `AnisoParams.from_data(...)`; Mehler-kernel cost in the eigenbasis of Ω².
-
-These lagrangian flow-matching variants are demonstrated in the tutorials above.
 
 ## How to cite
 
@@ -73,13 +78,13 @@ If you use Lagrangian Flow Matching in your research, please cite:
 ```bibtex
 @misc{du2026lagrangian,
   title         = {Lagrangian Flow Matching: A Least-Action Framework for Principled Path Design},
-  author        = {Du, Shukai* and Zhang, Junzhe* and Li, Yiming},
+  author        = {Du, Shukai and Zhang, Junzhe and Li, Yiming},
   year          = {2026},
   eprint        = {2605.15419},
   archivePrefix = {arXiv},
   primaryClass  = {cs.LG},
   url           = {https://arxiv.org/abs/2605.15419},
-  note          = {*Equal contribution. https://github.com/junzhez/lagrangian-flow-matching}
+  note          = {https://github.com/junzhez/lagrangian-flow-matching}
 }
 ```
 
@@ -187,7 +192,7 @@ For data-adaptive per-direction frequencies, swap in `torchlfm.AnisotropicHarmon
 │   └── models/                   <- MLP and U-Net architectures
 ├── examples/
 │   ├── 2D_tutorials/             <- 2D toy experiments and notebooks
-│   ├── images/                   <- MNIST / CIFAR-10 / Flowers / ImageNet training scripts
+│   ├── images/                   <- MNIST / CIFAR-10 training scripts
 │   ├── single_cell/              <- Single-cell trajectory inference
 │   └── tabular/                  <- Tabular generation (XGBoost CFM)
 ├── tests/
