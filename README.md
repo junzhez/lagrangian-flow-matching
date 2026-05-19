@@ -31,6 +31,12 @@ S(x₀, x₁) = (ω / 2 sin ω) · [ (‖x₀‖² + ‖x₁‖²) · cos ω −
 
 so source and target points are paired by least action rather than least Euclidean distance. The result is lower-action probability paths — curved trajectories that follow the harmonic geometry rather than straight lines — and higher-fidelity generation under the same simulation-free training objective. The package builds on TorchCFM ([Tong et al. 2024](https://arxiv.org/abs/2302.00482)), so existing CFM / OT-CFM / SF²M code paths continue to work.
 
+<p align="center">
+<img src="assets/8gaussians-to-moons_harmonic.gif" />
+</p>
+
+The density, vector field, and trajectories of simulation-free flow-matching schemes mapping 8 Gaussians to two moons, comparing OT-CFM, OT-Harmonic (ω = 0.01, 1, π/2), the OT stochastic interpolant, and the anisotropic harmonic path. The GIF above is produced by the [`examples/2D_tutorials/model-comparison-plotting.ipynb`](./examples/2D_tutorials/model-comparison-plotting.ipynb) notebook.
+
 ## Method overview
 
 `ExactOptimalTransportHarmonicConditionalFlowMatcher(sigma=0.0, omega=1)` runs in two steps per minibatch:
