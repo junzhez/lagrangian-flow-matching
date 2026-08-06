@@ -31,7 +31,17 @@ from torchdyn.core import NeuralODE
 from torchlfm.conditional_flow_matching import (
     ExactOptimalTransportConditionalFlowMatcher,
     ExactOptimalTransportHarmonicConditionalFlowMatcher,
+    ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher,
+    ExactOptimalTransportSignedCurvatureHarmonicConditionalFlowMatcher,
     VariancePreservingConditionalFlowMatcher,
+)
+from torchlfm.curvature import clamp_spectrum
+from torchlfm.curvature_fitting import (
+    contraction_ratios_from_cov,
+    fit_isotropic_scalar,
+    fit_straddling_segment_from_cov,
+    refine_covariance,
+    segment_covariances,
 )
 from torchlfm.models import MLP
 from torchlfm.optimal_transport import OTPlanSampler, wasserstein
@@ -48,6 +58,27 @@ WEIGHT_DECAY = 1e-5
 ODE_SOLVER = "euler"
 N_EVAL = 1000
 INTEGRATION_STEPS = 100
+
+# Per-segment curvature methods (Stage 0/A/B "Option 2" -- see
+# torchlfm/curvature_fitting.py). Fit fresh per (dataset, seed, h) since the
+# fit depends on which timepoint is held out.
+#
+# The first three couple via ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher's
+# Mahalanobis OT cost; "Isotropic c_k (true action-OT)" instead uses
+# ExactOptimalTransportSignedCurvatureHarmonicConditionalFlowMatcher's true
+# action cost on the *same* fitted c_k. The two isotropic baselines share a
+# path (both reduce to the plain sin/sinh/linear interpolant) but differ in
+# OT coupling for c_k < 0 -- Mahalanobis flips it, the true action cost
+# leaves it identical to plain OT-CFM's (see torchlfm/conditional_flow_matching.py
+# docstrings / tests for the proof). Comparing the two exercises that
+# distinction directly on real held-out data.
+CURVATURE_METHOD_NAMES = [
+    "Isotropic c_k (A.4)",
+    "Stage-A A_k",
+    "Stage-A + Refine (Option 2)",
+    "Isotropic c_k (true action-OT)",
+]
+N_FIT_MAX = 500  # subsample cap for the one-time closed-form/covariance fit
 
 
 def _seed_all(seed: int) -> None:
@@ -115,9 +146,26 @@ def renumbered_time(held_out: int, available_t) -> float:
     return (pos - 1) + (held_out - a) / (b - a)
 
 
-def get_batch_loo(fm, X, batch_size, available_t, ot_sampler, device):
+def _normalize_fm_spec(fm_spec, n_segments):
+    """Accept either a single (fm, ot_sampler) pair (broadcast to every
+    segment -- the existing behavior for OT-CFM/OT-Harmonic/OT-SI) or a
+    list of one (fm, ot_sampler) pair per segment (needed for piecewise
+    per-segment curvature, where only the segment straddling the held-out
+    timepoint has a nonzero A_k)."""
+    if isinstance(fm_spec, list):
+        assert len(fm_spec) == n_segments, (
+            f"per-segment fm_spec has {len(fm_spec)} entries, expected {n_segments}"
+        )
+        return fm_spec
+    return [fm_spec] * n_segments
+
+
+def get_batch_loo(fm_spec, X, batch_size, available_t, device):
+    n_segments = len(available_t) - 1
+    fm_list = _normalize_fm_spec(fm_spec, n_segments)
     ts, xts, uts = [], [], []
     for renum_idx, (orig_a, orig_b) in enumerate(zip(available_t[:-1], available_t[1:])):
+        fm, ot_sampler = fm_list[renum_idx]
         x0 = torch.from_numpy(
             X[orig_a][np.random.randint(X[orig_a].shape[0], size=batch_size)]
         ).float().to(device)
@@ -133,16 +181,95 @@ def get_batch_loo(fm, X, batch_size, available_t, ot_sampler, device):
     return torch.cat(ts), torch.cat(xts), torch.cat(uts)
 
 
-def train_one(fm, ot_sampler, X, available_t, dim: int, n_iter: int, device):
+def train_one(fm_spec, X, available_t, dim: int, n_iter: int, device):
     model = MLP(dim=dim, time_varying=True, w=MLP_WIDTH).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     for _ in range(n_iter):
         opt.zero_grad()
-        t, xt, ut = get_batch_loo(fm, X, BATCH_SIZE, available_t, ot_sampler, device)
+        t, xt, ut = get_batch_loo(fm_spec, X, BATCH_SIZE, available_t, device)
         vt = model(torch.cat([xt, t[:, None]], dim=-1))
         ((vt - ut) ** 2).mean().backward()
         opt.step()
     return model
+
+
+def _subsample(arr: np.ndarray, n_max: int, rng: np.random.Generator) -> np.ndarray:
+    if arr.shape[0] <= n_max:
+        return arr
+    idx = rng.choice(arr.shape[0], size=n_max, replace=False)
+    return arr[idx]
+
+
+def build_curvature_methods(
+    X, available_t, h: int, device,
+    rho_tol: float = 0.05, refine_steps: int = 50, refine_lr: float = 0.02, refine_beta: float = 0.9,
+):
+    """Fit the three per-segment-curvature methods (Stage A.4 isotropic
+    control, Stage-A closed-form, Stage-A + Option-2 covariance refinement)
+    for held-out timepoint ``h``. Returns {name: [(fm, ot_sampler), ...]}
+    (one entry per segment of ``available_t``, all plain OT-CFM except the
+    segment straddling h).
+
+    Only ``h``'s own timepoint is ever read (never a separate validation
+    point -- see torchlfm/curvature_fitting.py's module docstring for why
+    this is legitimate: only its covariance is used, never its per-sample
+    structure). Deterministic given numpy's global RNG state, so callers
+    that want reproducibility across runs should seed before calling.
+    """
+    orig_a, orig_b = h - 1, h + 1
+    straddle_idx = available_t.index(orig_a)
+    n_segments = len(available_t) - 1
+    dim = X[orig_a].shape[1]
+
+    # Fixed rng seed (not base_seed): which cells get subsampled for the
+    # one-time fit stays constant across --seeds, so seed-to-seed variance
+    # in the reported table reflects training/OT-resampling stochasticity
+    # (which does still vary by seed, via numpy's global RNG state -- see
+    # _seed_all(base_seed) called by main() right before this function),
+    # not which subset of cells happened to be drawn.
+    rng = np.random.default_rng(0)
+    X_left = _subsample(X[orig_a], N_FIT_MAX, rng)
+    X_right = _subsample(X[orig_b], N_FIT_MAX, rng)
+    X_mid = _subsample(X[h], N_FIT_MAX, rng)
+
+    Sig_straight, Sig_mid = segment_covariances(X_left, X_right, X_mid)
+    rho = contraction_ratios_from_cov(Sig_straight, Sig_mid)
+    curved = bool(np.any(np.abs(rho - 1.0) > rho_tol))
+
+    plain_fm = ExactOptimalTransportConditionalFlowMatcher(sigma=SIGMA)
+    zero_segments = [(plain_fm, None) for _ in range(n_segments)]
+
+    if not curved:
+        print(f"    [curvature] h={h}: rho={np.round(rho, 3)} ~= 1 within tol={rho_tol} "
+              f"-> A_k=0 everywhere (degenerates to OT-CFM)")
+        return {name: list(zero_segments) for name in CURVATURE_METHOD_NAMES}
+
+    print(f"    [curvature] h={h}: rho={np.round(rho, 3)} -> segment [{orig_a},{orig_b}] curved, fitting A_k")
+
+    A_stageA = fit_straddling_segment_from_cov(Sig_straight, Sig_mid)
+    A_refined, _hist = refine_covariance(
+        A_stageA, Sig_straight, Sig_mid, steps=refine_steps, lr=refine_lr, beta=refine_beta
+    )
+
+    c_k = fit_isotropic_scalar(rho)
+    A_iso = clamp_spectrum(c_k * np.eye(dim))
+    c_k_clamped = float(A_iso[0, 0])  # same clamped scalar used by the isotropic matrix baseline
+
+    methods = {}
+    for name, A in zip(
+        CURVATURE_METHOD_NAMES[:3], [A_iso, A_stageA, A_refined]
+    ):
+        fm = ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher(sigma=SIGMA, A=A)
+        segments = list(zero_segments)
+        segments[straddle_idx] = (fm, None)
+        methods[name] = segments
+
+    fm_signed = ExactOptimalTransportSignedCurvatureHarmonicConditionalFlowMatcher(sigma=SIGMA, c=c_k_clamped)
+    segments = list(zero_segments)
+    segments[straddle_idx] = (fm_signed, None)
+    methods[CURVATURE_METHOD_NAMES[3]] = segments
+
+    return methods
 
 
 def eval_w1(model, X, held_out: int, available_t, device) -> float:
@@ -186,6 +313,11 @@ def main():
     parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44, 45, 46],
                         help="Independent training seeds; mean ± std is reported across "
                              "these seeds.")
+    parser.add_argument("--curvature-rho-tol", type=float, default=0.05,
+                        help="Stage 0.3 gate: |rho-1| tolerance below which a segment is "
+                             "treated as geometrically straight (A_k=0) for the curvature methods.")
+    parser.add_argument("--curvature-refine-steps", type=int, default=50,
+                        help="Max Stage-B (Option 2) covariance-refinement steps.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -216,7 +348,8 @@ def main():
                 )
         held_out_by_ds[ds_name] = held_out
 
-        ds_results = {name: {h: [] for h in held_out} for name in METHODS}
+        all_method_names = list(METHODS) + CURVATURE_METHOD_NAMES
+        ds_results = {name: {h: [] for h in held_out} for name in all_method_names}
         for seed in args.seeds:
             print(f"\n----  seed={seed}  ----")
             for h in held_out:
@@ -225,10 +358,18 @@ def main():
                       f"available={available_t}  "
                       f"renum_eval_t={renumbered_time(h, available_t):.3f} ===")
                 base_seed = seed * 1_000_000 + ds_idx * 10_000 + h * 100
-                for name, (fm, ot_sampler) in METHODS.items():
+
+                _seed_all(base_seed)  # curvature fit: deterministic given (seed, ds, h)
+                curvature_methods = build_curvature_methods(
+                    X, available_t, h, device,
+                    rho_tol=args.curvature_rho_tol, refine_steps=args.curvature_refine_steps,
+                )
+                iter_methods = {**METHODS, **curvature_methods}
+
+                for name, fm_spec in iter_methods.items():
                     _seed_all(base_seed)        # train: shared across methods at (seed, ds, h)
                     t0 = time.time()
-                    model = train_one(fm, ot_sampler, X, available_t, cfg["dim"], n_iter, device)
+                    model = train_one(fm_spec, X, available_t, cfg["dim"], n_iter, device)
                     _seed_all(base_seed + 1)    # eval: shared across methods
                     w1 = eval_w1(model, X, h, available_t, device)
                     elapsed = time.time() - t0
@@ -251,7 +392,7 @@ def main():
         print(f"DATASET: {ds_name}   (n_seeds={n_seeds})")
         print(header)
         print("-" * width)
-        for name in METHODS:
+        for name in ds_results:
             per_t_cells = []
             for h in held_out:
                 vals = np.asarray(ds_results[name][h])

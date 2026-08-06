@@ -61,6 +61,8 @@ End-to-end demonstrations:
 - `HarmonicConditionalFlowMatcher`: $z = (x_0, x_1)$, $q(z) = q(x_0) q(x_1)$ with the harmonic interpolation `μ_t` above (default `omega = 1`).
 - `AnisotropicHarmonicConditionalFlowMatcher`: data-adaptive per-direction frequencies via `AnisoParams.from_data(...)`; Mehler-kernel cost in the eigenbasis of Ω².
 - `ExactOptimalTransportAnisotropicHarmonicConditionalFlowMatcher`: the action-OT counterpart of the above — exact minibatch OT coupling under the anisotropic harmonic action `S` in the PCA eigenbasis.
+- `MatrixHarmonicConditionalFlowMatcher` / `ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher`: a full symmetric curvature matrix `A` with possibly mixed-sign eigenvalues — elliptic (contracting) along positive-eigenvalue directions, hyperbolic (expanding) along negative ones, straight where zero. See `torchlfm.curvature_fitting` for fitting `A` from data.
+- `SignedCurvatureHarmonicConditionalFlowMatcher` / `ExactOptimalTransportSignedCurvatureHarmonicConditionalFlowMatcher`: the isotropic scalar special case, indexed by a single signed curvature `c ∈ (-∞, π²)` — repulsive (`c<0`), straight (`c=0`, recovers OT-CFM exactly), or attractive (`0<c<π²`) as one real-analytic family. Its OT coupling equals plain OT-CFM's for every `c`, including `c<0`. `HarmonicConditionalFlowMatcher`'s `omega` parameterization above remains available and is unaffected by this class.
 
 These lagrangian flow-matching variants are demonstrated in the tutorials above.
 

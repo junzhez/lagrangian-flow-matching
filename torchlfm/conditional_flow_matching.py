@@ -182,6 +182,54 @@ def _harmonic_action_cost(
     return coeff * (cos_w * (norm0_sq[:, None] + norm1_sq[None, :]) - 2.0 * dot)
 
 
+def _signed_harmonic_action_cost(
+    x0: torch.Tensor, x1: torch.Tensor, c: float, eps: float = 1e-6
+) -> torch.Tensor:
+    """Batched pairwise isotropic action cost for signed curvature c.
+
+    Generalizes ``_harmonic_action_cost`` to c <= 0 by analytic continuation
+    (w = sqrt(c) -> i*sqrt(-c) for c < 0, so sin -> i*sinh and cos -> cosh;
+    the two factors of i cancel in coeff, leaving a real hyperbolic form):
+
+        c > 0  (elliptic):   coeff = w / (2 sin w),  cos_w = cos(w),  w = sqrt(c)
+        c < 0  (hyperbolic): coeff = k / (2 sinh k), cos_w = cosh(k), k = sqrt(-c)
+        c = 0  (straight):   coeff = 1/2,            cos_w = 1  (recovers OT-CFM's 1/2||x1-x0||^2)
+
+    coeff > 0 for every c in (-inf, pi^2), so the cross term -2*coeff*<x0,x1>
+    always favors large <x0,x1> under minimization: the argmin OT coupling
+    equals plain OT-CFM's coupling for every c, including c < 0 (contrast
+    with ``_matrix_harmonic_mahalanobis_cost``, whose coupling deliberately
+    flips sign for negative isotropic curvature).
+
+    Parameters
+    ----------
+    x0 : Tensor, shape (N0, *dim)
+    x1 : Tensor, shape (N1, *dim)
+    c : float
+        Signed curvature. Must satisfy c < pi^2.
+
+    Returns
+    -------
+    S : Tensor, shape (N0, N1)
+    """
+    x0f = x0.reshape(x0.shape[0], -1)  # [N0, d]
+    x1f = x1.reshape(x1.shape[0], -1)  # [N1, d]
+    if abs(c) < eps:
+        coeff, cos_w = 0.5, 1.0
+    elif c > 0:
+        w = math.sqrt(c)
+        coeff = w / (2.0 * math.sin(w))
+        cos_w = math.cos(w)
+    else:
+        k = math.sqrt(-c)
+        coeff = k / (2.0 * math.sinh(k))
+        cos_w = math.cosh(k)
+    norm0_sq = (x0f ** 2).sum(-1)       # [N0]
+    norm1_sq = (x1f ** 2).sum(-1)       # [N1]
+    dot = x0f @ x1f.T                   # [N0, N1]
+    return coeff * (cos_w * (norm0_sq[:, None] + norm1_sq[None, :]) - 2.0 * dot)
+
+
 def _aniso_action_cost(
     x0: torch.Tensor, x1: torch.Tensor, params: "AnisoParams"
 ) -> torch.Tensor:
@@ -1156,6 +1204,295 @@ class ExactOptimalTransportAnisotropicHarmonicConditionalFlowMatcher(
             return term0[:, None] + term1[None, :] - 2 * cross
 
         self.ot_sampler = OTPlanSampler(method="exact", cost_fn=_cost)
+
+    def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+
+    def guided_sample_location_and_conditional_flow(
+        self, x0, x1, y0=None, y1=None, t=None, return_noise=False
+    ):
+        x0, x1, y0, y1 = self.ot_sampler.sample_plan_with_labels(x0, x1, y0, y1)
+        if return_noise:
+            t, xt, ut, eps = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1, eps
+        else:
+            t, xt, ut = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1
+
+
+def _matrix_pr_coeffs(lam: torch.Tensor, t: torch.Tensor):
+    """Per-eigencomponent P(t), R(t) and their t-derivatives for a symmetric
+    curvature matrix's eigenvalues ``lam``.
+
+    Each eigenvalue lambda_i of A parameterizes a boundary-value path
+    x'' = -lambda_i x, x(0)=x0_i, x(1)=x1_i:
+        lambda_i > 0 (elliptic):  P=sin(w(1-t))/sin(w), R=sin(wt)/sin(w), w=sqrt(lambda_i)
+        lambda_i < 0 (hyperbolic): P=sinh(w(1-t))/sinh(w), R=sinh(wt)/sinh(w), w=sqrt(-lambda_i)
+        lambda_i = 0: P=1-t, R=t (continuous limit of both branches as w -> 0)
+
+    Inputs to sin/sinh/etc. are clamped into their valid domain before the
+    call (not the outputs clamped after), since torch.where evaluates both
+    branches and a wrong-branch value can otherwise be non-finite.
+
+    Parameters
+    ----------
+    lam : Tensor, shape (d,)
+    t   : Tensor, shape (bs, 1)
+
+    Returns
+    -------
+    P, R, dP, dR : Tensor, shape (bs, d)
+    """
+    eps = 1e-6
+    pos = lam > eps
+    neg = lam < -eps
+
+    w_pos = torch.sqrt(torch.clamp(lam, min=eps))
+    sin_w = torch.where(pos, torch.sin(w_pos), torch.ones_like(w_pos))
+    P_pos = torch.sin(w_pos * (1 - t)) / sin_w
+    R_pos = torch.sin(w_pos * t) / sin_w
+    dP_pos = -w_pos * torch.cos(w_pos * (1 - t)) / sin_w
+    dR_pos = w_pos * torch.cos(w_pos * t) / sin_w
+
+    w_neg = torch.sqrt(torch.clamp(-lam, min=eps))
+    sinh_w = torch.where(neg, torch.sinh(w_neg), torch.ones_like(w_neg))
+    P_neg = torch.sinh(w_neg * (1 - t)) / sinh_w
+    R_neg = torch.sinh(w_neg * t) / sinh_w
+    dP_neg = -w_neg * torch.cosh(w_neg * (1 - t)) / sinh_w
+    dR_neg = w_neg * torch.cosh(w_neg * t) / sinh_w
+
+    P_zero = (1 - t) * torch.ones_like(lam)
+    R_zero = t * torch.ones_like(lam)
+    dP_zero = -torch.ones_like(P_zero)
+    dR_zero = torch.ones_like(P_zero)
+
+    P = torch.where(pos, P_pos, torch.where(neg, P_neg, P_zero))
+    R = torch.where(pos, R_pos, torch.where(neg, R_neg, R_zero))
+    dP = torch.where(pos, dP_pos, torch.where(neg, dP_neg, dP_zero))
+    dR = torch.where(pos, dR_pos, torch.where(neg, dR_neg, dR_zero))
+    return P, R, dP, dR
+
+
+def _matrix_harmonic_mahalanobis_cost(x0: torch.Tensor, x1: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
+    """Batched pairwise Mahalanobis cost (x1-x0)^T A (x1-x0).
+
+    Parameters
+    ----------
+    x0 : Tensor, shape (N0, d)
+    x1 : Tensor, shape (N1, d)
+    A  : Tensor, shape (d, d), symmetric
+
+    Returns
+    -------
+    S : Tensor, shape (N0, N1)
+
+    Reduces to a positive scalar multiple of squared-Euclidean cost (leaving
+    OT-CFM's coupling unchanged) iff A = c*I with c > 0.
+    """
+    x0f = x0.reshape(x0.shape[0], -1)
+    x1f = x1.reshape(x1.shape[0], -1)
+    term0 = (x0f * (x0f @ A)).sum(-1)   # [N0]
+    term1 = (x1f * (x1f @ A)).sum(-1)   # [N1]
+    cross = (x0f @ A) @ x1f.T           # [N0, N1]
+    return term0[:, None] + term1[None, :] - 2 * cross
+
+
+class MatrixHarmonicConditionalFlowMatcher(ConditionalFlowMatcher):
+    """Harmonic path conditional flow matcher with a full symmetric curvature matrix A.
+
+    Generalizes HarmonicConditionalFlowMatcher's scalar omega and
+    AnisotropicHarmonicConditionalFlowMatcher's always-positive diagonal
+    frequency vector to an arbitrary symmetric matrix A with possibly
+    mixed-sign eigenvalues: positive eigenvalues give an elliptic
+    (sin/cos, contracting) path along that eigendirection, negative
+    eigenvalues give a hyperbolic (sinh/cosh, expanding) path, and zero
+    eigenvalues give a straight line — see ``_matrix_pr_coeffs``. Path:
+
+        gamma_t = Q [P(t) (Q^T x0) + R(t) (Q^T x1)]
+
+    where A = Q diag(lambda) Q^T.
+
+    Parameters
+    ----------
+    sigma : Union[float, int]
+        Noise standard deviation (default 0.0).
+    A : array-like, shape (d, d)
+        Symmetric curvature matrix. Required — there is no sensible default.
+        Fit with ``torchlfm.curvature_fitting``. Must satisfy
+        lambda_max(A) < pi^2.
+    """
+
+    def __init__(self, sigma: Union[float, int] = 0.0, A=None):
+        super().__init__(sigma)
+        if A is None:
+            raise ValueError(
+                "A is required. Use torchlfm.curvature_fitting.fit_straddling_segment "
+                "(or a zero matrix) to obtain it."
+            )
+        A_t = torch.as_tensor(A, dtype=torch.float)
+        if A_t.dim() != 2 or A_t.shape[0] != A_t.shape[1]:
+            raise ValueError(f"A must be a square matrix, got shape {tuple(A_t.shape)}")
+        lam = torch.linalg.eigvalsh(A_t)
+        if lam.max().item() >= math.pi ** 2 - 1e-6:
+            raise ValueError(
+                f"lambda_max(A)={lam.max().item():.4f} is not < pi^2. "
+                "Clamp A's spectrum (e.g. torchlfm.curvature.clamp_spectrum) before "
+                "constructing this matcher."
+            )
+        self.A = A_t
+        self._tc: dict = {}
+
+    def _tensors(self, device):
+        """Return (lam, Q) cached per device: A = Q diag(lam) Q^T."""
+        key = str(device)
+        if key not in self._tc:
+            lam, Q = torch.linalg.eigh(self.A.to(device))
+            self._tc[key] = (lam, Q)
+        return self._tc[key]
+
+    def compute_mu_t(self, x0, x1, t):
+        shape = x0.shape
+        bs = shape[0]
+        lam, Q = self._tensors(x0.device)
+        t1d = t.reshape(bs, 1)
+        x0t = x0.reshape(bs, -1) @ Q
+        x1t = x1.reshape(bs, -1) @ Q
+        P, R, _, _ = _matrix_pr_coeffs(lam, t1d)
+        return ((P * x0t + R * x1t) @ Q.T).reshape(shape)
+
+    def compute_conditional_flow(self, x0, x1, t, xt):
+        del xt
+        shape = x0.shape
+        bs = shape[0]
+        lam, Q = self._tensors(x0.device)
+        t1d = t.reshape(bs, 1)
+        x0t = x0.reshape(bs, -1) @ Q
+        x1t = x1.reshape(bs, -1) @ Q
+        _, _, dP, dR = _matrix_pr_coeffs(lam, t1d)
+        return ((dP * x0t + dR * x1t) @ Q.T).reshape(shape)
+
+
+class ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher(MatrixHarmonicConditionalFlowMatcher):
+    """OT-coupled matrix-harmonic flow matcher (any dimension d, mixed-sign curvature).
+
+    Couples (x0, x1) via exact OT under the Mahalanobis cost
+    (x1-x0)^T A (x1-x0) instead of squared-Euclidean distance. When
+    A = c*I with c > 0, this cost is a positive scalar multiple of
+    squared-Euclidean distance, so the resulting coupling is identical to
+    plain ExactOptimalTransportConditionalFlowMatcher's — only the
+    anisotropic part of A reweights the assignment.
+
+    Parameters
+    ----------
+    sigma : float
+        Noise standard deviation (default 0.0).
+    A : array-like, shape (d, d)
+        Symmetric curvature matrix, see MatrixHarmonicConditionalFlowMatcher.
+    """
+
+    def __init__(self, sigma: Union[float, int] = 0.0, A=None):
+        super().__init__(sigma=sigma, A=A)
+        self.ot_sampler = OTPlanSampler(
+            method="exact",
+            cost_fn=lambda x0, x1: _matrix_harmonic_mahalanobis_cost(x0, x1, self.A.to(x0.device)),
+        )
+
+    def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+
+    def guided_sample_location_and_conditional_flow(
+        self, x0, x1, y0=None, y1=None, t=None, return_noise=False
+    ):
+        x0, x1, y0, y1 = self.ot_sampler.sample_plan_with_labels(x0, x1, y0, y1)
+        if return_noise:
+            t, xt, ut, eps = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1, eps
+        else:
+            t, xt, ut = super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
+            return t, xt, ut, y0, y1
+
+
+class SignedCurvatureHarmonicConditionalFlowMatcher(ConditionalFlowMatcher):
+    """Isotropic harmonic path parameterized by a single signed curvature c.
+
+    Unifies the repulsive (c < 0), straight (c = 0, recovers OT-CFM exactly)
+    and attractive (0 < c < pi^2) regimes as one real-analytic family, by
+    reusing ``_matrix_pr_coeffs``'s branch selection with a scalar
+    eigenvalue instead of MatrixHarmonicConditionalFlowMatcher's full
+    eigendecomposition (so no data dimensionality needs to be known at
+    construction time):
+
+        gamma_t = P(t; c)*x0 + R(t; c)*x1
+
+    with P, R given by sin/cos for c > 0, sinh/cosh for c < 0, and (1-t)/t
+    (the continuous limit of both) at c = 0.
+
+    Given a target contraction ratio rho for the midpoint (C(1/2) = rho),
+    the corresponding c is available in closed form via
+    ``torchlfm.curvature.Cfac_to_c(rho)``.
+
+    Parameters
+    ----------
+    sigma : Union[float, int]
+        Noise standard deviation (default 0.0).
+    c : Union[float, int]
+        Signed curvature (default 0.0, the OT-CFM/straight-line case).
+        Must satisfy c < pi^2 (first conjugate point).
+    """
+
+    def __init__(self, sigma: Union[float, int] = 0.0, c: Union[float, int] = 0.0):
+        super().__init__(sigma)
+        if c >= math.pi ** 2 - 1e-6:
+            raise ValueError(
+                f"c={c} is not < pi^2 (first conjugate point); the boundary-value "
+                "path is undefined at/beyond this curvature."
+            )
+        self.c = float(c)
+
+    def compute_mu_t(self, x0, x1, t):
+        t = pad_t_like_x(t, x0)
+        lam = torch.tensor(self.c, device=x0.device, dtype=x0.dtype)
+        P, R, _, _ = _matrix_pr_coeffs(lam, t)
+        return P * x0 + R * x1
+
+    def compute_conditional_flow(self, x0, x1, t, xt):
+        del xt  # signed-curvature velocity does not depend on xt
+        t = pad_t_like_x(t, x0)
+        lam = torch.tensor(self.c, device=x0.device, dtype=x0.dtype)
+        _, _, dP, dR = _matrix_pr_coeffs(lam, t)
+        return dP * x0 + dR * x1
+
+
+class ExactOptimalTransportSignedCurvatureHarmonicConditionalFlowMatcher(
+    SignedCurvatureHarmonicConditionalFlowMatcher
+):
+    """OT-CFM with signed-curvature harmonic interpolation paths.
+
+    Combines exact OT minibatch coupling with the isotropic signed-curvature
+    path (SignedCurvatureHarmonicConditionalFlowMatcher), coupled under the
+    true action cost (``_signed_harmonic_action_cost``). Because that cost's
+    cross-term coefficient is positive for every c in (-inf, pi^2), the
+    resulting OT coupling equals plain ExactOptimalTransportConditionalFlowMatcher's
+    for every c, including c < 0 (repulsive) -- unlike
+    ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher, whose Mahalanobis
+    cost deliberately flips the coupling for negative isotropic curvature.
+
+    Parameters
+    ----------
+    sigma : Union[float, int]
+        Noise standard deviation (default 0.0).
+    c : Union[float, int]
+        Signed curvature (default 0.0).
+    """
+
+    def __init__(self, sigma: Union[float, int] = 0.0, c: Union[float, int] = 0.0):
+        super().__init__(sigma=sigma, c=c)
+        self.ot_sampler = OTPlanSampler(
+            method="exact",
+            cost_fn=lambda x0, x1: _signed_harmonic_action_cost(x0, x1, self.c),
+        )
 
     def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
         x0, x1 = self.ot_sampler.sample_plan(x0, x1)
