@@ -25,8 +25,29 @@ _PI2 = np.pi ** 2
 # but clamping right up against that boundary leaves C(1/2) factors
 # numerically enormous (e.g. at pi^2 - 1e-3, Cfac ~ 6000x) -- fine as a hard
 # validity check, but a bad default for a *fitting* clamp that then feeds
-# gradient-based refinement. Default to a 10% margin instead.
-_DEFAULT_PI2_CLAMP = 0.9 * _PI2
+# gradient-based refinement.
+#
+# A 10% margin (0.9 * pi^2) is still far too close. The elliptic path
+# coefficients are P = sin(w(1-t))/sin(w), R = sin(wt)/sin(w) with
+# w = sqrt(lambda) (see _matrix_pr_coeffs in conditional_flow_matching.py),
+# so the conditional path is amplified by 1/sin(w) relative to the segment it
+# interpolates. That factor is non-monotonic in w and turns sharply upward
+# well before the boundary:
+#
+#     lambda   w      1/sin(w)
+#      1.0    1.000     1.19
+#      4.0    2.000     1.10
+#      8.0    2.828     3.25
+#      8.883  2.980     6.23   <- the old 0.9 * pi^2 default
+#      9.870  3.142      inf   <- pi^2
+#
+# A closed-form fit whose top eigenvalue saturates the clamp therefore emits
+# paths swinging ~6x wider than the data, and gradient refinement warm-started
+# there sees a loss surface that is flat in the repulsive direction. Cap at
+# lambda = 4 (w = 2) instead: 1/sin(w) = 1.10 and the C(1/2) factor
+# 1/cos(w/2) = 1.85, keeping the fitted path the same order of magnitude as
+# the straight-line interpolant it is meant to correct.
+_DEFAULT_LAMBDA_CLAMP = 4.0
 
 
 def sym(Q: np.ndarray, vals) -> np.ndarray:
@@ -71,7 +92,7 @@ def inv_sqrtm(S: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     return sym(Q, 1.0 / np.sqrt(np.clip(w, eps, None)))
 
 
-def clamp_spectrum(A: np.ndarray, pi2: float = _DEFAULT_PI2_CLAMP) -> np.ndarray:
+def clamp_spectrum(A: np.ndarray, pi2: float = _DEFAULT_LAMBDA_CLAMP) -> np.ndarray:
     """Cap eigenvalues of A at pi2, enforcing lambda_max(A) < pi^2."""
     l, Q = np.linalg.eigh(A)
     return sym(Q, np.minimum(l, pi2))

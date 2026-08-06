@@ -92,7 +92,19 @@ class OTPlanSampler:
             M = torch.cdist(x0, x1) ** 2
         if self.normalize_cost:
             M = M / M.max()  # should not be normalized when using minibatches
-        p = self.ot_fn(a, b, M.detach().cpu().numpy())
+        M = M.detach().cpu().numpy()
+        # An OT plan is invariant under M -> M + const when both marginals are
+        # fixed: every feasible coupling sums to 1, so a constant shift moves
+        # the objective by exactly that constant and leaves the argmin
+        # unchanged. Custom cost_fn's can be negative (e.g. the Mahalanobis
+        # cost (x1-x0)^T A (x1-x0) for an A with negative eigenvalues), and
+        # POT's network simplex intermittently reports such problems
+        # infeasible. Shifting to nonnegative gives the identical optimal plan
+        # on a better-conditioned LP.
+        m_min = M.min()
+        if m_min < 0:
+            M = M - m_min
+        p = self.ot_fn(a, b, M)
         if not np.all(np.isfinite(p)):
             print("ERROR: p is not finite")
             print(p)

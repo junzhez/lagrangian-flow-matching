@@ -24,10 +24,20 @@ be unit-tested with synthetic data independent of any dataset.
 
 import numpy as np
 
-from .curvature import A_from_C, Cfac_to_c, C_of_A, clamp_spectrum, inv_sqrtm, sym
+from .curvature import (
+    _DEFAULT_LAMBDA_CLAMP,
+    A_from_C,
+    Cfac_to_c,
+    C_of_A,
+    clamp_spectrum,
+    inv_sqrtm,
+    sym,
+)
 from .optimal_transport import OTPlanSampler
 
-_DEFAULT_PI2 = 0.9 * np.pi ** 2
+# Single source of truth with curvature.clamp_spectrum -- see the rationale
+# there for why this is well below pi^2.
+_DEFAULT_PI2 = _DEFAULT_LAMBDA_CLAMP
 
 
 def _default_ot_sampler() -> OTPlanSampler:

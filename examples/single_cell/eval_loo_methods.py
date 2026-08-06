@@ -15,6 +15,9 @@ Usage:
     python examples/single_cell/eval_loo_methods.py
     python examples/single_cell/eval_loo_methods.py --datasets cite --held-out 1 \
         --n-iter 500 --seeds 42 43
+    python examples/single_cell/eval_loo_methods.py --list-methods
+    python examples/single_cell/eval_loo_methods.py --datasets eb \
+        --methods OT-CFM "Stage-A + Refine (Option 2)"
 """
 import argparse
 import bisect
@@ -111,6 +114,35 @@ METHODS = {
     "OT-Harmonic w=pi/2":  (ExactOptimalTransportHarmonicConditionalFlowMatcher(sigma=SIGMA, omega=math.pi / 2), None),
     "OT-SI":               (VariancePreservingConditionalFlowMatcher(sigma=SIGMA), OTPlanSampler(method="exact")),
 }
+
+# Canonical order of every evaluable method; --methods selects a subset of these
+# and the summary table always prints them in this order.
+ALL_METHOD_NAMES = list(METHODS) + CURVATURE_METHOD_NAMES
+
+
+def resolve_methods(requested):
+    """Map --methods values onto canonical method names (case-insensitive).
+
+    Returns every method when ``requested`` is None. Raises SystemExit listing
+    the valid names if any entry is unrecognized.
+    """
+    if requested is None:
+        return list(ALL_METHOD_NAMES)
+    lookup = {name.lower(): name for name in ALL_METHOD_NAMES}
+    selected, unknown = set(), []
+    for entry in requested:
+        name = lookup.get(entry.strip().lower())
+        if name is None:
+            unknown.append(entry)
+        else:
+            selected.add(name)
+    if unknown:
+        raise SystemExit(
+            "Unknown method(s): " + ", ".join(f'"{u}"' for u in unknown)
+            + "\nAvailable methods:\n"
+            + "".join(f'  "{n}"\n' for n in ALL_METHOD_NAMES)
+        )
+    return [name for name in ALL_METHOD_NAMES if name in selected]
 
 DATASETS = {
     "eb":       {"file": "ebdata_v3.h5ad",                "embedding": "X_pca",   "time_col": "sample_labels", "dim": 5},
@@ -302,6 +334,13 @@ def main():
                         default=list(DATASETS),
                         choices=list(DATASETS),
                         help="Which datasets to evaluate on")
+    parser.add_argument("--methods", nargs="+", default=None, metavar="NAME",
+                        help="Subset of methods to evaluate (default: all). Matched "
+                             "case-insensitively; quote names containing spaces, e.g. "
+                             "--methods OT-CFM \"Stage-A + Refine (Option 2)\". "
+                             "See --list-methods for the available names.")
+    parser.add_argument("--list-methods", action="store_true",
+                        help="Print the available method names and exit.")
     parser.add_argument("--held-out", type=int, nargs="+", default=None,
                         help="Override interior timepoints to leave out (default: all interior per dataset)")
     parser.add_argument("--max-epochs", type=int, default=MAX_EPOCHS_DEFAULT,
@@ -320,10 +359,24 @@ def main():
                         help="Max Stage-B (Option 2) covariance-refinement steps.")
     args = parser.parse_args()
 
+    if args.list_methods:
+        print("Available methods:")
+        for name in ALL_METHOD_NAMES:
+            print(f'  "{name}"')
+        return
+
+    selected_methods = resolve_methods(args.methods)
+    # The per-segment curvature fit is only needed if a curvature method is
+    # selected. Skipping it does not perturb any other method's RNG stream:
+    # train/eval re-seed from base_seed immediately before each method runs.
+    need_curvature = any(name in CURVATURE_METHOD_NAMES for name in selected_methods)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device={device}  datasets={args.datasets}  max_epochs={args.max_epochs}  "
           f"seeds={args.seeds}"
           + (f"  n_iter_override={args.n_iter}" if args.n_iter is not None else ""))
+    if args.methods is not None:
+        print(f"methods={selected_methods}")
 
     # all_results[ds_name][name][h] = list of per-seed W1 values (length = len(args.seeds))
     all_results = {}
@@ -348,8 +401,7 @@ def main():
                 )
         held_out_by_ds[ds_name] = held_out
 
-        all_method_names = list(METHODS) + CURVATURE_METHOD_NAMES
-        ds_results = {name: {h: [] for h in held_out} for name in all_method_names}
+        ds_results = {name: {h: [] for h in held_out} for name in selected_methods}
         for seed in args.seeds:
             print(f"\n----  seed={seed}  ----")
             for h in held_out:
@@ -359,12 +411,15 @@ def main():
                       f"renum_eval_t={renumbered_time(h, available_t):.3f} ===")
                 base_seed = seed * 1_000_000 + ds_idx * 10_000 + h * 100
 
-                _seed_all(base_seed)  # curvature fit: deterministic given (seed, ds, h)
-                curvature_methods = build_curvature_methods(
-                    X, available_t, h, device,
-                    rho_tol=args.curvature_rho_tol, refine_steps=args.curvature_refine_steps,
-                )
-                iter_methods = {**METHODS, **curvature_methods}
+                curvature_methods = {}
+                if need_curvature:
+                    _seed_all(base_seed)  # curvature fit: deterministic given (seed, ds, h)
+                    curvature_methods = build_curvature_methods(
+                        X, available_t, h, device,
+                        rho_tol=args.curvature_rho_tol, refine_steps=args.curvature_refine_steps,
+                    )
+                available_methods = {**METHODS, **curvature_methods}
+                iter_methods = {name: available_methods[name] for name in selected_methods}
 
                 for name, fm_spec in iter_methods.items():
                     _seed_all(base_seed)        # train: shared across methods at (seed, ds, h)
