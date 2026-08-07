@@ -36,9 +36,11 @@ from torchlfm.conditional_flow_matching import (
     ExactOptimalTransportHarmonicConditionalFlowMatcher,
     ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher,
     ExactOptimalTransportSignedCurvatureHarmonicConditionalFlowMatcher,
+    FieldMatrixHarmonicConditionalFlowMatcher,
     VariancePreservingConditionalFlowMatcher,
 )
 from torchlfm.curvature import clamp_spectrum
+from torchlfm.curvature_field import CurvatureField
 from torchlfm.curvature_fitting import (
     contraction_ratios_from_cov,
     fit_isotropic_scalar,
@@ -46,6 +48,8 @@ from torchlfm.curvature_fitting import (
     refine_covariance,
     segment_covariances,
 )
+from torchlfm.field_coupling import make_field_ot_sampler
+from torchlfm.field_training import make_field_segment_batch
 from torchlfm.models import MLP
 from torchlfm.optimal_transport import OTPlanSampler, wasserstein
 from torchlfm.utils import torch_wrapper
@@ -81,6 +85,18 @@ CURVATURE_METHOD_NAMES = [
     "Stage-A + Refine (Option 2)",
     "Isotropic c_k (true action-OT)",
 ]
+
+# Spatially-varying field method (Parts I/II: torchlfm/curvature_field.py,
+# field_coupling.py, field_training.py). Unlike CURVATURE_METHOD_NAMES above
+# (one A_k for the single segment straddling h, everywhere else plain
+# OT-CFM), this fits ONE CurvatureField from every *other* observed
+# timepoint and uses it for every non-straddling segment; the straddling
+# segment still falls back to the existing Stage-A per-segment fit (see
+# build_field_methods's docstring for why). The scalar-c/global-A ablations
+# Stage 6 would otherwise want already exist above ("Isotropic c_k (A.4)"
+# / "Stage-A A_k") -- only one new row is needed here.
+FIELD_METHOD_NAMES = ["Field A(x,t)"]
+
 N_FIT_MAX = 500  # subsample cap for the one-time closed-form/covariance fit
 
 
@@ -117,7 +133,7 @@ METHODS = {
 
 # Canonical order of every evaluable method; --methods selects a subset of these
 # and the summary table always prints them in this order.
-ALL_METHOD_NAMES = list(METHODS) + CURVATURE_METHOD_NAMES
+ALL_METHOD_NAMES = list(METHODS) + CURVATURE_METHOD_NAMES + FIELD_METHOD_NAMES
 
 
 def resolve_methods(requested):
@@ -181,9 +197,10 @@ def renumbered_time(held_out: int, available_t) -> float:
 def _normalize_fm_spec(fm_spec, n_segments):
     """Accept either a single (fm, ot_sampler) pair (broadcast to every
     segment -- the existing behavior for OT-CFM/OT-Harmonic/OT-SI) or a
-    list of one (fm, ot_sampler) pair per segment (needed for piecewise
-    per-segment curvature, where only the segment straddling the held-out
-    timepoint has a nonzero A_k)."""
+    list of one per-segment spec (needed for piecewise per-segment
+    curvature, where only the segment straddling the held-out timepoint
+    has a nonzero A_k). Each per-segment spec is either an (fm, ot_sampler)
+    pair or a callable batch closure -- see get_batch_loo."""
     if isinstance(fm_spec, list):
         assert len(fm_spec) == n_segments, (
             f"per-segment fm_spec has {len(fm_spec)} entries, expected {n_segments}"
@@ -193,11 +210,29 @@ def _normalize_fm_spec(fm_spec, n_segments):
 
 
 def get_batch_loo(fm_spec, X, batch_size, available_t, device):
+    """Each segment's spec is either an (fm, ot_sampler) pair (the existing
+    contract: draw x0,x1 here, optionally OT-couple, then
+    fm.sample_location_and_conditional_flow(x0,x1)) or a callable
+    ``batch_fn(batch_size, device) -> (t, xt, ut)`` (torchlfm.field_training's
+    per-segment closures, needed because FieldMatrixHarmonicConditionalFlowMatcher
+    takes required extra per-call (A, x_c) arguments that don't fit the plain
+    2-positional-arg contract -- the closure owns its own x0/x1 draw and
+    Stage-4 coupling internally)."""
     n_segments = len(available_t) - 1
     fm_list = _normalize_fm_spec(fm_spec, n_segments)
     ts, xts, uts = [], [], []
     for renum_idx, (orig_a, orig_b) in enumerate(zip(available_t[:-1], available_t[1:])):
-        fm, ot_sampler = fm_list[renum_idx]
+        spec = fm_list[renum_idx]
+        if callable(spec):
+            # Closure already returns GLOBAL time (its own t0 + t_local*dt,
+            # see torchlfm.field_training) -- unlike the tuple branch below,
+            # it must NOT be shifted by renum_idx again.
+            t, xt, ut = spec(batch_size, device)
+            ts.append(t)
+            xts.append(xt)
+            uts.append(ut)
+            continue
+        fm, ot_sampler = spec
         x0 = torch.from_numpy(
             X[orig_a][np.random.randint(X[orig_a].shape[0], size=batch_size)]
         ).float().to(device)
@@ -304,6 +339,97 @@ def build_curvature_methods(
     return methods
 
 
+def build_field_methods(
+    X, available_t, h: int, device,
+    m_nn: int = 60, max_anchors_per_knot: int = 50, n_fit_max: int = N_FIT_MAX,
+    rho_tol: float = 0.05,
+):
+    """Fit the spatially-varying field method (Parts I/II) for held-out
+    timepoint ``h``. Returns {"Field A(x,t)": [seg_spec, ...]}, one entry
+    per segment of ``available_t`` -- a per-segment closure (full field,
+    Stage 4 coupling) for every segment except the one straddling ``h``,
+    which instead reuses the existing Stage-A per-segment fit (see below).
+
+    Known limitation, report honestly rather than hide: all three datasets
+    this harness targets are time-sparse (eb: 5 timepoints; cite/multiome:
+    4), so holding out any interior timepoint leaves every remaining
+    interior anchor knot immediately adjacent to the gap -- there is no
+    timepoint far enough from ``h`` to avoid it. torchlfm.curvature_field's
+    spacing check is diagnostic-only (the read-off hardcodes the anchor at
+    the exact segment midpoint, s=0.5, with no correction for unequal
+    spacing), so every anchor the field fits here is subject to that
+    uncorrected bias. Per the recipe's own "a largely-null diagnostic is a
+    legitimate finding" ethos: this method may show little to no advantage
+    over "Stage-A A_k" on these specific datasets, which is itself an
+    honest, reportable result, not a bug.
+
+    Why the straddling segment does NOT use the spatial field: the field's
+    own anchors are fit at knots adjacent to the h-gap (see above), so
+    temporally extrapolating them into the untested segment is exactly the
+    "curvature does not transfer across knots" leakage risk the recipe's
+    Stage 6 warns about ("a measured curvature two knots away had the
+    wrong sign across a bottleneck"). The held-out marginal's own
+    covariance (never its per-sample structure -- see
+    build_curvature_methods's leakage note, which applies identically
+    here) is the better-justified source for this one segment, so it
+    reuses that exact fit.
+    """
+    orig_a, orig_b = h - 1, h + 1
+    straddle_idx = available_t.index(orig_a)
+    n_segments = len(available_t) - 1
+
+    plain_fm = ExactOptimalTransportConditionalFlowMatcher(sigma=SIGMA)
+    zero_segments = [(plain_fm, None) for _ in range(n_segments)]
+
+    # Fixed rng seed (not base_seed), same rationale as build_curvature_methods:
+    # which cells get subsampled stays constant across --seeds.
+    rng = np.random.default_rng(0)
+    subsampled = {t: _subsample(X[t], n_fit_max, rng) for t in available_t}
+
+    try:
+        field = CurvatureField.fit(
+            [subsampled[t] for t in available_t],
+            [float(t) for t in available_t],
+            m_nn=m_nn,
+            max_anchors_per_knot=max_anchors_per_knot,
+            rng=np.random.default_rng(0),
+        )
+    except Exception as exc:
+        print(f"    [field] h={h}: CurvatureField.fit failed ({exc!r}) -> falling back to OT-CFM everywhere")
+        return {FIELD_METHOD_NAMES[0]: list(zero_segments)}
+
+    X_mid = _subsample(X[h], n_fit_max, rng)
+    Sig_straight, Sig_mid = segment_covariances(subsampled[orig_a], subsampled[orig_b], X_mid)
+    rho = contraction_ratios_from_cov(Sig_straight, Sig_mid)
+    curved = bool(np.any(np.abs(rho - 1.0) > rho_tol))
+
+    segments = list(zero_segments)
+    if curved:
+        A_stageA = fit_straddling_segment_from_cov(Sig_straight, Sig_mid)
+        segments[straddle_idx] = (
+            ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher(sigma=SIGMA, A=A_stageA),
+            None,
+        )
+
+    n_field_segments = 0
+    for renum_idx, (a, b) in enumerate(zip(available_t[:-1], available_t[1:])):
+        if renum_idx == straddle_idx:
+            continue
+        t_bar = 0.5 * (a + b)
+        sampler, cache = make_field_ot_sampler(field, t_bar=t_bar)
+        fm_field = FieldMatrixHarmonicConditionalFlowMatcher(sigma=SIGMA)
+        segments[renum_idx] = make_field_segment_batch(
+            X[a], X[b], fm_field, sampler, cache, t0=float(renum_idx), dt=1.0
+        )
+        n_field_segments += 1
+
+    print(f"    [field] h={h}: fit CurvatureField from {len(field.anchors)} anchors across "
+          f"{len(available_t)} knots; {n_field_segments}/{n_segments} segments use the field "
+          f"(straddling segment {'curved -> Stage-A A_k' if curved else 'rho~=1 -> OT-CFM'})")
+
+    return {FIELD_METHOD_NAMES[0]: segments}
+
+
 def eval_w1(model, X, held_out: int, available_t, device) -> float:
     model.eval()
     start_orig = available_t[0]
@@ -357,6 +483,12 @@ def main():
                              "treated as geometrically straight (A_k=0) for the curvature methods.")
     parser.add_argument("--curvature-refine-steps", type=int, default=50,
                         help="Max Stage-B (Option 2) covariance-refinement steps.")
+    parser.add_argument("--field-m-nn", type=int, default=60,
+                        help="CurvatureField anchor neighbourhood size (Stage 1.2) for the "
+                             "'Field A(x,t)' method.")
+    parser.add_argument("--field-max-anchors-per-knot", type=int, default=50,
+                        help="Max anchors fit per observed timepoint for the 'Field A(x,t)' "
+                             "method (bounds the one-time fitting cost).")
     args = parser.parse_args()
 
     if args.list_methods:
@@ -370,6 +502,7 @@ def main():
     # selected. Skipping it does not perturb any other method's RNG stream:
     # train/eval re-seed from base_seed immediately before each method runs.
     need_curvature = any(name in CURVATURE_METHOD_NAMES for name in selected_methods)
+    need_field = any(name in FIELD_METHOD_NAMES for name in selected_methods)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device={device}  datasets={args.datasets}  max_epochs={args.max_epochs}  "
@@ -418,7 +551,15 @@ def main():
                         X, available_t, h, device,
                         rho_tol=args.curvature_rho_tol, refine_steps=args.curvature_refine_steps,
                     )
-                available_methods = {**METHODS, **curvature_methods}
+                field_methods = {}
+                if need_field:
+                    _seed_all(base_seed)  # field fit: deterministic given (seed, ds, h)
+                    field_methods = build_field_methods(
+                        X, available_t, h, device,
+                        m_nn=args.field_m_nn, max_anchors_per_knot=args.field_max_anchors_per_knot,
+                        rho_tol=args.curvature_rho_tol,
+                    )
+                available_methods = {**METHODS, **curvature_methods, **field_methods}
                 iter_methods = {name: available_methods[name] for name in selected_methods}
 
                 for name, fm_spec in iter_methods.items():

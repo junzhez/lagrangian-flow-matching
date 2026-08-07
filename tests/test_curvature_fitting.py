@@ -55,10 +55,13 @@ def test_contraction_ratios_detects_shrunk_axis():
 def test_fit_straddling_segment_recovers_ground_truth_mixed_sign_A():
     """Gaussian-exact case: data generated exactly from the closed-form path
     (via C_of_A), so the closed-form fit should recover A_k to within
-    finite-sample/bootstrap noise."""
+    finite-sample/bootstrap noise. X_left ~ N(0,I) makes Sig_straight_true
+    ~= I -- the degenerate case where the now-fixed whiten-and-congruence-back
+    bug was invisible -- so this alone does not guard against that class of
+    bug; see test_fit_straddling_segment_anisotropic_Sig_straight below."""
     np.random.seed(TEST_SEED)
     rng = np.random.default_rng(1)
-    d, N = 3, 4000
+    d, N = 3, 8000
     Q = _random_orthogonal(d, rng)
     lam_true = np.array([2.5, -1.2, 0.0])
     A_true = sym(Q, lam_true)
@@ -72,7 +75,33 @@ def test_fit_straddling_segment_recovers_ground_truth_mixed_sign_A():
 
     A_fit = fit_straddling_segment(X_left, X_right, X_mid_true)
     rel_err = np.abs(A_true - A_fit).max() / np.abs(A_true).max()
-    assert rel_err < 0.3, f"relative error too large: {rel_err}"
+    assert rel_err < 0.1, f"relative error too large: {rel_err}"
+
+
+def test_fit_straddling_segment_anisotropic_Sig_straight():
+    """Same recovery test as above, but with a genuinely anisotropic
+    Sig_straight_true (X_left is not isotropic). This is the case that
+    would have caught the original 'whiten and congruence back' bug --
+    that formula loses roughly half its achievable accuracy here."""
+    np.random.seed(TEST_SEED)
+    rng = np.random.default_rng(13)
+    d, N = 3, 6000
+    Q = _random_orthogonal(d, rng)
+    lam_true = np.array([2.0, -1.5, 0.4])
+    A_true = sym(Q, lam_true)
+
+    Qs = _random_orthogonal(d, rng)
+    Sig_straight_gen = sym(Qs, np.array([4.0, 1.0, 0.25]))  # anisotropic
+    X_left = rng.multivariate_normal(np.zeros(d), Sig_straight_gen, size=N)
+    X_right = X_left.copy()  # OT trivially recovers the identity coupling
+    C_true = C_of_A(A_true)
+    Sig_straight_true = np.cov(X_left, rowvar=False)
+    Sig_mid_true = C_true @ Sig_straight_true @ C_true
+    X_mid_true = rng.multivariate_normal(np.zeros(d), Sig_mid_true, size=N)
+
+    A_fit = fit_straddling_segment(X_left, X_right, X_mid_true)
+    rel_err = np.abs(A_true - A_fit).max() / np.abs(A_true).max()
+    assert rel_err < 0.1, f"relative error too large: {rel_err}"
 
 
 def test_fit_isotropic_scalar_matches_hand_computed_value():

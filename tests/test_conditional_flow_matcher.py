@@ -15,6 +15,7 @@ from torchlfm.conditional_flow_matching import (
     ExactOptimalTransportConditionalFlowMatcher,
     ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher,
     ExactOptimalTransportSignedCurvatureHarmonicConditionalFlowMatcher,
+    FieldMatrixHarmonicConditionalFlowMatcher,
     MatrixHarmonicConditionalFlowMatcher,
     SchrodingerBridgeConditionalFlowMatcher,
     SignedCurvatureHarmonicConditionalFlowMatcher,
@@ -305,6 +306,172 @@ def test_matrix_harmonic_negative_isotropic_flips_coupling():
     # c > 0: nearest-neighbor (identity) coupling; c < 0: reversed (cross) coupling.
     assert pi_pos[0, 0] > pi_pos[0, 1]
     assert pi_neg[0, 1] > pi_neg[0, 0]
+
+
+# ---------------------------------------------------------------------------
+# FieldMatrixHarmonicConditionalFlowMatcher — batched per-pair curvature
+# matrix A and centre x_c (recipe Stage 3.3), as opposed to
+# MatrixHarmonicConditionalFlowMatcher's single matcher-wide A.
+# ---------------------------------------------------------------------------
+
+
+def test_field_matrix_harmonic_reference_value_per_pair():
+    """Two pairs, each with its own 2x2 A and nonzero centre x_c: hand-compute
+    the expected mu_t/ut per pair via the scalar sin/cos, sinh/cosh formulas
+    directly (mirrors test_matrix_harmonic_reference_value_mixed_sign, but
+    with differing A per batch element)."""
+    torch.manual_seed(TEST_SEED)
+    fm = FieldMatrixHarmonicConditionalFlowMatcher(sigma=0.0)
+
+    A0 = torch.tensor([[2.0, 0.0], [0.0, 1.5]])  # all-elliptic
+    A1 = torch.tensor([[2.0, 0.0], [0.0, -3.0]])  # mixed sign
+    A = torch.stack([A0, A1])
+    x_c = torch.tensor([[0.0, 0.0], [1.0, -2.0]])
+
+    x0 = torch.randn(2, 2)
+    x1 = torch.randn(2, 2)
+    t = torch.rand(2)
+
+    mu_t = fm.compute_mu_t(x0, x1, t, A, x_c)
+    ut = fm.compute_conditional_flow(x0, x1, t, None, A, x_c)
+
+    def scalar_path(w0_sq_signed, z0, z1, ti):
+        if w0_sq_signed > 0:
+            w = math.sqrt(w0_sq_signed)
+            p = math.sin(w * (1 - ti)) / math.sin(w)
+            r = math.sin(w * ti) / math.sin(w)
+            dp = -w * math.cos(w * (1 - ti)) / math.sin(w)
+            dr = w * math.cos(w * ti) / math.sin(w)
+        else:
+            w = math.sqrt(-w0_sq_signed)
+            p = math.sinh(w * (1 - ti)) / math.sinh(w)
+            r = math.sinh(w * ti) / math.sinh(w)
+            dp = -w * math.cosh(w * (1 - ti)) / math.sinh(w)
+            dr = w * math.cosh(w * ti) / math.sinh(w)
+        return p * z0 + r * z1, dp * z0 + dr * z1
+
+    for i, A_i in enumerate([A0, A1]):
+        z0 = (x0[i] - x_c[i]).tolist()
+        z1 = (x1[i] - x_c[i]).tolist()
+        # A_i is diagonal, so its own diagonal entries are each axis's
+        # eigenvalue in the *original* coordinate order -- unlike
+        # torch.linalg.eigvalsh, which returns eigenvalues sorted
+        # ascending (and thus permuted relative to the coordinate axes).
+        lam = A_i.diagonal().tolist()
+        ti = t[i].item()
+        expected_mu = torch.zeros(2)
+        expected_ut = torch.zeros(2)
+        for ax in range(2):
+            g, dg = scalar_path(lam[ax], z0[ax], z1[ax], ti)
+            expected_mu[ax] = g
+            expected_ut[ax] = dg
+        expected_mu = expected_mu + x_c[i]
+        torch.testing.assert_close(mu_t[i], expected_mu, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(ut[i], expected_ut, atol=1e-4, rtol=1e-4)
+
+
+def test_field_matrix_harmonic_matches_matrix_harmonic_when_A_shared():
+    """Sanity cross-check: if every pair in the batch shares the same A and
+    x_c=0, FieldMatrixHarmonicConditionalFlowMatcher's output must equal
+    MatrixHarmonicConditionalFlowMatcher's."""
+    torch.manual_seed(TEST_SEED)
+    A_single = torch.tensor([[2.0, 0.3], [0.3, -1.5]])
+    fm_ref = MatrixHarmonicConditionalFlowMatcher(sigma=0.0, A=A_single)
+    fm_field = FieldMatrixHarmonicConditionalFlowMatcher(sigma=0.0)
+
+    bs = 16
+    x0 = torch.randn(bs, 2)
+    x1 = torch.randn(bs, 2)
+    t = torch.rand(bs)
+    A_batched = A_single.unsqueeze(0).expand(bs, -1, -1)
+    x_c = torch.zeros(bs, 2)
+
+    mu_ref = fm_ref.compute_mu_t(x0, x1, t)
+    ut_ref = fm_ref.compute_conditional_flow(x0, x1, t, mu_ref)
+    mu_field = fm_field.compute_mu_t(x0, x1, t, A_batched, x_c)
+    ut_field = fm_field.compute_conditional_flow(x0, x1, t, None, A_batched, x_c)
+
+    torch.testing.assert_close(mu_field, mu_ref, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(ut_field, ut_ref, atol=1e-4, rtol=1e-4)
+
+
+def test_field_matrix_harmonic_zero_reduces_to_linear():
+    torch.manual_seed(TEST_SEED)
+    fm = FieldMatrixHarmonicConditionalFlowMatcher(sigma=0.0)
+    bs = TEST_BATCH_SIZE
+    x0 = torch.randn(bs, 3)
+    x1 = torch.randn(bs, 3)
+    t = torch.rand(bs)
+    A = torch.zeros(bs, 3, 3)
+    x_c = torch.zeros(bs, 3)
+    mu_t = fm.compute_mu_t(x0, x1, t, A, x_c)
+    expected = t[:, None] * x1 + (1 - t[:, None]) * x0
+    torch.testing.assert_close(mu_t, expected, atol=1e-5, rtol=1e-5)
+
+
+def test_field_matrix_harmonic_domain_validation_raises_and_can_be_disabled():
+    A = torch.zeros(2, 2, 2)
+    A[1] = torch.eye(2) * (math.pi**2)  # only the second pair violates the domain
+    x_c = torch.zeros(2, 2)
+    x0 = torch.randn(2, 2)
+    x1 = torch.randn(2, 2)
+    t = torch.rand(2)
+
+    fm_strict = FieldMatrixHarmonicConditionalFlowMatcher(sigma=0.0, validate=True)
+    with pytest.raises(ValueError):
+        fm_strict.compute_mu_t(x0, x1, t, A, x_c)
+
+    fm_lenient = FieldMatrixHarmonicConditionalFlowMatcher(sigma=0.0, validate=False)
+    mu_t = fm_lenient.compute_mu_t(x0, x1, t, A, x_c)
+    assert not torch.any(torch.isnan(mu_t))
+
+
+def test_field_matrix_harmonic_bad_A_shape_raises():
+    fm = FieldMatrixHarmonicConditionalFlowMatcher(sigma=0.0)
+    x0 = torch.randn(4, 2)
+    x1 = torch.randn(4, 2)
+    t = torch.rand(4)
+    x_c = torch.zeros(4, 2)
+    A = torch.eye(2)  # missing the batch dimension
+    with pytest.raises(ValueError, match="shape"):
+        fm.compute_mu_t(x0, x1, t, A, x_c)
+
+
+def test_field_matrix_harmonic_centre_translation_invariance():
+    """Shifting x0, x1, and x_c by the same constant offset must leave the
+    conditional flow (velocity) unchanged -- the centre term only ever
+    enters compute_conditional_flow through z0=x0-x_c, z1=x1-x_c, which are
+    themselves translation invariant."""
+    torch.manual_seed(TEST_SEED)
+    fm = FieldMatrixHarmonicConditionalFlowMatcher(sigma=0.0)
+    bs = 8
+    A = torch.eye(2).unsqueeze(0).expand(bs, -1, -1) * 1.5
+    x0 = torch.randn(bs, 2)
+    x1 = torch.randn(bs, 2)
+    t = torch.rand(bs)
+    x_c = torch.randn(bs, 2)
+
+    ut_base = fm.compute_conditional_flow(x0, x1, t, None, A, x_c)
+
+    offset = torch.tensor([3.0, -4.0])
+    ut_shifted = fm.compute_conditional_flow(x0 + offset, x1 + offset, t, None, A, x_c + offset)
+    torch.testing.assert_close(ut_shifted, ut_base, atol=1e-5, rtol=1e-5)
+
+
+def test_field_matrix_harmonic_sample_location_and_conditional_flow_shapes():
+    torch.manual_seed(TEST_SEED)
+    fm = FieldMatrixHarmonicConditionalFlowMatcher(sigma=0.0)
+    bs, d = 10, 3
+    x0 = torch.randn(bs, d)
+    x1 = torch.randn(bs, d)
+    A = torch.zeros(bs, d, d)
+    x_c = torch.zeros(bs, d)
+    t, xt, ut = fm.sample_location_and_conditional_flow(x0, x1, A, x_c)
+    assert t.shape == (bs,)
+    assert xt.shape == (bs, d)
+    assert ut.shape == (bs, d)
+    assert not torch.any(torch.isnan(xt))
+    assert not torch.any(torch.isnan(ut))
 
 
 # ---------------------------------------------------------------------------

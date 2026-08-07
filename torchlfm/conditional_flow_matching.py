@@ -1414,6 +1414,117 @@ class ExactOptimalTransportMatrixHarmonicConditionalFlowMatcher(MatrixHarmonicCo
             return t, xt, ut, y0, y1
 
 
+class FieldMatrixHarmonicConditionalFlowMatcher(ConditionalFlowMatcher):
+    """Batched per-pair curvature matrix-harmonic flow matcher (recipe
+    Stage 3.3: "assemble the interpolant").
+
+    Unlike MatrixHarmonicConditionalFlowMatcher (one A shared by the whole
+    matcher, fixed at construction), every pair i in the batch gets its
+    own symmetric curvature matrix A_i and centre x_c_i, precomputed once
+    per pair -- e.g. via ``torchlfm.curvature_field.CurvatureField.query``
+    at the pair's straight midpoint and segment-local time -- and passed
+    in on every call. This class does not fit or query a field itself: A
+    and x_c are the caller's responsibility to compute and cache (see
+    ``curvature_field``'s module docstring for the scope boundary between
+    the two modules).
+
+    Path (z0 = x0 - x_c, z1 = x1 - x_c, each expressed in pair i's own
+    eigenbasis of A_i):
+
+        gamma_t = x_c + P(t; A_i) z0 + R(t; A_i) z1
+
+    reusing ``_matrix_pr_coeffs`` unmodified (it is already elementwise
+    over a batched ``lam: (bs, d)`` against ``t: (bs, 1)``).
+
+    Parameters
+    ----------
+    sigma : Union[float, int]
+        Noise standard deviation (default 0.0).
+    validate : bool
+        If True (default), raise if any pair's lambda_max(A) >= pi^2 in a
+        given call. This forces a host/device sync every call (unlike
+        MatrixHarmonicConditionalFlowMatcher's construction-time-only
+        check, since A varies per call here rather than being fixed at
+        construction) -- disable once a training loop trusts its upstream
+        field's clamping, to avoid that per-step sync.
+    """
+
+    def __init__(self, sigma: Union[float, int] = 0.0, validate: bool = True):
+        super().__init__(sigma)
+        self.validate = validate
+
+    def _eig_batch(self, A: torch.Tensor):
+        """A: (bs, d, d) symmetric -> lam: (bs, d), Q: (bs, d, d)."""
+        if A.dim() != 3 or A.shape[1] != A.shape[2]:
+            raise ValueError(f"A must have shape (bs, d, d), got {tuple(A.shape)}")
+        lam, Q = torch.linalg.eigh(A)
+        if self.validate:
+            lam_max = lam.max().item()
+            if lam_max >= math.pi**2 - 1e-6:
+                raise ValueError(
+                    f"lambda_max(A)={lam_max:.4f} is not < pi^2 for at least one "
+                    "pair in this batch. Clamp upstream (torchlfm.curvature."
+                    "clamp_spectrum / CurvatureField.A already does this per "
+                    "query -- check the caller's cache), or pass validate=False "
+                    "once that is trusted."
+                )
+        return lam, Q
+
+    @staticmethod
+    def _project(x: torch.Tensor, x_c: torch.Tensor, Q: torch.Tensor) -> torch.Tensor:
+        """(x - x_c) expressed in each pair's own eigenbasis Q: shape (bs, d)."""
+        bs = x.shape[0]
+        z = x.reshape(bs, -1) - x_c.reshape(bs, -1)
+        return torch.bmm(z.unsqueeze(1), Q).squeeze(1)
+
+    def compute_mu_t(self, x0, x1, t, A, x_c):
+        shape = x0.shape
+        bs = shape[0]
+        lam, Q = self._eig_batch(A)
+        t1d = t.reshape(bs, 1)
+        z0t = self._project(x0, x_c, Q)
+        z1t = self._project(x1, x_c, Q)
+        P, R, _, _ = _matrix_pr_coeffs(lam, t1d)
+        gt = torch.bmm((P * z0t + R * z1t).unsqueeze(1), Q.transpose(1, 2)).squeeze(1)
+        return (gt + x_c.reshape(bs, -1)).reshape(shape)
+
+    def compute_conditional_flow(self, x0, x1, t, xt, A, x_c):
+        del xt
+        shape = x0.shape
+        bs = shape[0]
+        lam, Q = self._eig_batch(A)
+        t1d = t.reshape(bs, 1)
+        z0t = self._project(x0, x_c, Q)
+        z1t = self._project(x1, x_c, Q)
+        _, _, dP, dR = _matrix_pr_coeffs(lam, t1d)
+        # no + x_c term here: the centre is constant along a pair's path
+        # (Stage 3's tractability trick), so its time-derivative is zero.
+        return torch.bmm((dP * z0t + dR * z1t).unsqueeze(1), Q.transpose(1, 2)).squeeze(1).reshape(shape)
+
+    def sample_location_and_conditional_flow(self, x0, x1, A, x_c, t=None, return_noise=False):
+        """Same contract as the base class's method, with A (bs, d, d) and
+        x_c (bs, *dim) inserted as required positional arguments. They
+        vary per call (a different set of pairs each minibatch), unlike
+        MatrixHarmonicConditionalFlowMatcher's constructor-fixed A, so
+        they cannot be constructor state here -- Stage 5's own recipe
+        language is "cache each pair's (A_pair, x_c)", a caching concern
+        for the caller/training harness, not this matcher.
+        """
+        if t is None:
+            t = torch.rand(x0.shape[0]).type_as(x0)
+        assert len(t) == x0.shape[0], "t has to have batch size dimension"
+
+        eps = self.sample_noise_like(x0)
+        mu_t = self.compute_mu_t(x0, x1, t, A, x_c)
+        sigma_t = pad_t_like_x(self.compute_sigma_t(t), x0)
+        xt = mu_t + sigma_t * eps
+        ut = self.compute_conditional_flow(x0, x1, t, xt, A, x_c)
+        if return_noise:
+            return t, xt, ut, eps
+        else:
+            return t, xt, ut
+
+
 class SignedCurvatureHarmonicConditionalFlowMatcher(ConditionalFlowMatcher):
     """Isotropic harmonic path parameterized by a single signed curvature c.
 

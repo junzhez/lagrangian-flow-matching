@@ -27,10 +27,12 @@ import numpy as np
 from .curvature import (
     _DEFAULT_LAMBDA_CLAMP,
     A_from_C,
+    C_from_covariances,
     Cfac_to_c,
     C_of_A,
     clamp_spectrum,
     inv_sqrtm,
+    ridge_covariance,
     sym,
 )
 from .optimal_transport import OTPlanSampler
@@ -44,7 +46,7 @@ def _default_ot_sampler() -> OTPlanSampler:
     return OTPlanSampler(method="exact")
 
 
-def _match_ot(X_left, X_right, ot_sampler=None):
+def match_ot(X_left, X_right, ot_sampler=None):
     """OT-couple two point clouds, returning aligned (x0, x1) as float64 numpy arrays."""
     import torch
 
@@ -59,11 +61,6 @@ def _cov(X: np.ndarray) -> np.ndarray:
     return np.atleast_2d(np.cov(np.asarray(X, dtype=np.float64), rowvar=False))
 
 
-def _ridge(S: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    d = S.shape[0]
-    return S + eps * (np.trace(S) / d) * np.eye(d)
-
-
 def segment_covariances(X_left, X_right, X_mid_true, ot_sampler=None):
     """OT-match X_left/X_right once and return (Sig_straight, Sig_mid): the
     ridged covariance of the coupled straight-line midpoints, and the
@@ -72,9 +69,9 @@ def segment_covariances(X_left, X_right, X_mid_true, ot_sampler=None):
     Option-2 refinement, which also needs these covariances) can OT-match
     once and reuse the result instead of recomputing it three times.
     """
-    x0c, x1c = _match_ot(X_left, X_right, ot_sampler)
+    x0c, x1c = match_ot(X_left, X_right, ot_sampler)
     mid_straight = 0.5 * (x0c + x1c)
-    Sig_straight = _ridge(_cov(mid_straight))
+    Sig_straight = ridge_covariance(_cov(mid_straight))
     Sig_mid = _cov(X_mid_true)
     return Sig_straight, Sig_mid
 
@@ -103,12 +100,19 @@ def contraction_ratios(X_left, X_right, X_mid_true, ot_sampler=None) -> np.ndarr
 def fit_straddling_segment_from_cov(
     Sig_straight: np.ndarray, Sig_mid: np.ndarray, pi2: float = _DEFAULT_PI2, eps_clip: float = 1e-6
 ) -> np.ndarray:
-    """Core of Stage A.2, operating directly on precomputed covariances."""
-    Wm = inv_sqrtm(Sig_straight)
-    M = Wm @ Sig_mid @ Wm
-    mvals, mQ = np.linalg.eigh(M)
-    C_k = sym(mQ, np.sqrt(np.clip(mvals, eps_clip, None)))
-    A_k = Wm @ A_from_C(C_k) @ Wm
+    """Core of Stage A.2, operating directly on precomputed covariances.
+
+    Uses curvature.C_from_covariances -- the SPD solution of
+    Sig_mid = C @ Sig_straight @ C -- and maps its eigenvalues to A via
+    A_from_C. (An earlier version of this function instead whitened
+    Sig_mid by Sig_straight^{-1/2}, mapped the whitened matrix's
+    eigenvalues, and congruenced the result back by Sig_straight^{-1/2}.
+    That is a different operation and loses accuracy whenever
+    Sig_straight is anisotropic -- see torchlfm.curvature.C_from_covariances
+    and tests/test_curvature.py::test_C_from_covariances_incorrect_whiten_congruence_form_diverges.)
+    """
+    C_k = C_from_covariances(Sig_straight, Sig_mid, eps=eps_clip)
+    A_k = A_from_C(C_k)
     return clamp_spectrum(A_k, pi2)
 
 
